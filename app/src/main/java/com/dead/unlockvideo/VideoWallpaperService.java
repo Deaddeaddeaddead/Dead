@@ -96,6 +96,14 @@ public class VideoWallpaperService extends WallpaperService {
          * пришло событие разблокировки. Сбрасывается при выключении экрана.
          */
         private boolean unlocked;
+        /**
+         * Был ли телефон заблокирован (требовал проверки личности), когда включился экран.
+         * Если нет (отсрочка блокировки, Smart Lock), разблокировкой считаем только уход
+         * экрана блокировки — иначе реверс не успел бы показаться.
+         */
+        private boolean deviceLockedAtWake = true;
+        /** Экран выключался — при пробуждении нужно заново запомнить состояние блокировки. */
+        private boolean sampleOnWake;
 
         /** Пока виден экран блокировки, следим за разблокировкой (лицо, задержки системы). */
         private final Runnable unlockWatch = new Runnable() {
@@ -187,6 +195,7 @@ public class VideoWallpaperService extends WallpaperService {
         @Override
         public void onVisibilityChanged(boolean isVisible) {
             visible = isVisible;
+            if (isVisible) sampleWakeState();
             log((isVisible ? "обои видны" : "обои скрыты") + " (заблокировано="
                     + !unlockedNow() + ") " + state());
             if (!isVisible) {
@@ -210,6 +219,7 @@ public class VideoWallpaperService extends WallpaperService {
         private void onScreenOff() {
             log("экран выключен, " + state());
             unlocked = isPreview();
+            sampleOnWake = true;
             handler.removeCallbacks(unlockWatch);
             hiddenByApp = false;
             armed = isPreview();
@@ -228,6 +238,7 @@ public class VideoWallpaperService extends WallpaperService {
         }
 
         private void onScreenOn() {
+            sampleWakeState();
             log("экран включён (заблокировано=" + !unlockedNow() + ") " + state());
             // Например, разблокировали лицом ещё до того, как экран включился полностью.
             if (!unlocked && unlockedNow()) {
@@ -310,8 +321,20 @@ public class VideoWallpaperService extends WallpaperService {
          */
         private boolean unlockedNow() {
             if (isPreview()) return true;
-            return keyguard.isKeyguardSecure() ? !keyguard.isDeviceLocked()
-                    : !keyguard.isKeyguardLocked();
+            if (!keyguard.isKeyguardLocked()) return true;
+            // Экран блокировки ещё показан: разблокировано, только если личность
+            // подтвердили уже на нём (например, лицом).
+            return keyguard.isKeyguardSecure() && deviceLockedAtWake
+                    && !keyguard.isDeviceLocked();
+        }
+
+        /** Запоминает при пробуждении, требовал ли телефон проверки личности. */
+        private void sampleWakeState() {
+            if (!sampleOnWake) return;
+            sampleOnWake = false;
+            deviceLockedAtWake = keyguard.isDeviceLocked();
+            log("пробуждение: экран_блокировки=" + keyguard.isKeyguardLocked()
+                    + " нужна_проверка=" + deviceLockedAtWake);
         }
 
         private void watchUnlock() {
