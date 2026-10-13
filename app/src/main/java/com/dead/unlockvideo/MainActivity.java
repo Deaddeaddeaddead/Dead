@@ -73,25 +73,46 @@ public class MainActivity extends Activity {
         Prefs cfg = Prefs.load(this);
         playCount = cfg.playCount;
 
+        // Как в One UI: крупный заголовок на треть экрана, при прокрутке он
+        // сворачивается в верхнюю панель.
+        FrameLayout screen = new FrameLayout(this);
+        screen.setFitsSystemWindows(true);
         ScrollView scroll = new ScrollView(this);
-        scroll.setFitsSystemWindows(true);
         scroll.setClipToPadding(false);
         LinearLayout root = vertical();
-        root.setPadding(dp(20), dp(20), dp(20), dp(32));
+        root.setPadding(dp(12), 0, dp(12), dp(32));
         scroll.addView(root);
-        setContentView(scroll);
+        screen.addView(scroll);
 
-        // Заголовок
-        TextView title = text("Видеообои", 32, R.color.text);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        root.addView(title);
-        wallpaperStatus = text("", 13, R.color.on_tonal);
-        wallpaperStatus.setBackgroundResource(R.drawable.chip_bg);
-        wallpaperStatus.setPadding(dp(12), dp(6), dp(12), dp(6));
-        LinearLayout.LayoutParams chipParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        chipParams.topMargin = dp(8);
-        root.addView(wallpaperStatus, chipParams);
+        LinearLayout topBar = new LinearLayout(this);
+        topBar.setGravity(Gravity.CENTER_VERTICAL);
+        topBar.setBackgroundColor(getColor(R.color.bg));
+        topBar.setPadding(dp(24), 0, dp(24), 0);
+        TextView smallTitle = text(getString(R.string.app_name), 20, R.color.text);
+        smallTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        topBar.addView(smallTitle);
+        topBar.setAlpha(0f);
+        screen.addView(topBar, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
+        setContentView(screen);
+
+        int headerHeight = Math.max(dp(200),
+                Math.round(getResources().getDisplayMetrics().heightPixels * 0.34f));
+        LinearLayout header = vertical();
+        header.setGravity(Gravity.CENTER);
+        TextView bigTitle = text(getString(R.string.app_name), 36, R.color.text);
+        header.addView(bigTitle);
+        wallpaperStatus = text("", 14, R.color.text2);
+        wallpaperStatus.setPadding(0, dp(6), 0, 0);
+        header.addView(wallpaperStatus);
+        root.addView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, headerHeight));
+
+        scroll.setOnScrollChangeListener((v, x, y, oldX, oldY) -> {
+            float progress = Math.min(1f, y / (float) Math.max(1, headerHeight - dp(56)));
+            header.setAlpha(Math.max(0f, 1f - progress * 1.4f));
+            topBar.setAlpha(Math.max(0f, (progress - 0.75f) / 0.25f));
+        });
 
         // Видео
         LinearLayout card = card(root, null);
@@ -138,7 +159,7 @@ public class MainActivity extends Activity {
                 "Видео плавно проигрывается назад на экране блокировки. "
                         + "Нужна разовая подготовка видео; звук в этом режиме не играет");
         reverseBox = vertical();
-        reverseBox.setPadding(0, dp(4), 0, dp(8));
+        reverseBox.setPadding(dp(24), 0, dp(24), dp(14));
         reverseProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         reverseProgress.setMax(100);
         reverseProgress.setProgressTintList(ColorStateList.valueOf(getColor(R.color.accent)));
@@ -186,7 +207,7 @@ public class MainActivity extends Activity {
         shown = this;
         WallpaperInfo info = WallpaperManager.getInstance(this).getWallpaperInfo();
         boolean active = info != null && info.getComponent().equals(wallpaperComponent());
-        wallpaperStatus.setText(active ? "● Обои установлены" : "○ Обои ещё не установлены");
+        wallpaperStatus.setText(active ? "Обои установлены" : "Обои ещё не установлены");
         updateReverseStatus();
     }
 
@@ -473,31 +494,48 @@ public class MainActivity extends Activity {
 
     private LinearLayout card(LinearLayout root, String title) {
         if (title != null) {
-            TextView header = text(title, 14, R.color.accent);
-            header.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-            header.setPadding(dp(8), dp(24), dp(8), dp(8));
+            TextView header = text(title, 14, R.color.text2);
+            header.setTypeface(Typeface.DEFAULT_BOLD);
+            header.setPadding(dp(24), dp(22), dp(24), dp(8));
             root.addView(header);
         }
         LinearLayout card = vertical();
         card.setBackgroundResource(R.drawable.card_bg);
-        card.setPadding(dp(16), dp(title == null ? 16 : 8), dp(16), dp(title == null ? 16 : 8));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        if (title == null) params.topMargin = dp(20);
-        root.addView(card, params);
+        card.setClipToOutline(true);
+        card.setPadding(dp(title == null ? 16 : 0), dp(title == null ? 16 : 4),
+                dp(title == null ? 16 : 0), dp(title == null ? 16 : 4));
+        root.addView(card, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         return card;
+    }
+
+    /** Тонкий разделитель между пунктами, с отступами как в One UI. */
+    private void addDividerIfNeeded(LinearLayout card) {
+        if (card.getChildCount() == 0) return;
+        View divider = new View(this);
+        divider.setBackgroundColor(getColor(R.color.divider));
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2));
+        params.leftMargin = dp(24);
+        params.rightMargin = dp(24);
+        card.addView(divider, params);
     }
 
     private void switchRow(LinearLayout card, String key, boolean value, String title,
                            String subtitle) {
         LinearLayout row = row(title, subtitle);
         Switch toggle = new Switch(this);
+        toggle.setThumbResource(R.drawable.switch_thumb);
+        toggle.setTrackResource(R.drawable.switch_track);
+        toggle.setSwitchMinWidth(dp(46));
+        toggle.setShowText(false);
         toggle.setChecked(value);
         toggle.setOnCheckedChangeListener((button, isChecked) -> onSwitchChanged(key, isChecked));
         row.addView(toggle);
         row.setOnClickListener(v -> toggle.toggle());
         switches.put(key, toggle);
         rows.put(key, row);
+        addDividerIfNeeded(card);
         card.addView(row);
     }
 
@@ -506,7 +544,7 @@ public class MainActivity extends Activity {
         Button minus = roundButton("−");
         minus.setOnClickListener(v -> changeCount(-1));
         countValue = text(String.valueOf(playCount), 18, R.color.text);
-        countValue.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        countValue.setTypeface(Typeface.DEFAULT_BOLD);
         countValue.setGravity(Gravity.CENTER);
         countValue.setMinWidth(dp(44));
         Button plus = roundButton("+");
@@ -514,6 +552,7 @@ public class MainActivity extends Activity {
         row.addView(minus);
         row.addView(countValue);
         row.addView(plus);
+        addDividerIfNeeded(card);
         card.addView(row);
         return row;
     }
@@ -522,17 +561,17 @@ public class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setMinimumHeight(dp(64));
-        row.setPadding(0, dp(10), 0, dp(10));
+        row.setMinimumHeight(dp(68));
+        row.setPadding(dp(24), dp(14), dp(24), dp(14));
         TypedValue ripple = new TypedValue();
         getTheme().resolveAttribute(android.R.attr.selectableItemBackground, ripple, true);
         row.setBackgroundResource(ripple.resourceId);
 
         LinearLayout texts = vertical();
         texts.setPadding(0, 0, dp(12), 0);
-        texts.addView(text(title, 16, R.color.text));
+        texts.addView(text(title, 17, R.color.text));
         if (subtitle != null) {
-            TextView sub = text(subtitle, 13, R.color.text2);
+            TextView sub = text(subtitle, 14, R.color.text2);
             sub.setPadding(0, dp(2), 0, 0);
             texts.addView(sub);
         }
@@ -546,7 +585,7 @@ public class MainActivity extends Activity {
         button.setText(label);
         button.setAllCaps(false);
         button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        button.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setStateListAnimator(null);
         button.setBackgroundResource(filled ? R.drawable.button_filled : R.drawable.button_tonal);
         button.setTextColor(getColor(filled ? R.color.on_accent : R.color.on_tonal));
@@ -571,7 +610,9 @@ public class MainActivity extends Activity {
 
     private LinearLayout.LayoutParams buttonParams(int topMarginDp) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(56));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(52));
+        params.leftMargin = dp(12);
+        params.rightMargin = dp(12);
         params.topMargin = dp(topMarginDp);
         return params;
     }
