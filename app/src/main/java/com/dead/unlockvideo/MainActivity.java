@@ -49,7 +49,6 @@ import java.util.Map;
 public class MainActivity extends Activity {
     private static final int REQUEST_PICK_VIDEO = 1;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static final String LABEL_TAG = "card_label";
 
     // Подготовка реверса переживает пересоздание экрана; трогается только на главном потоке.
     private static boolean reverseRunning;
@@ -129,7 +128,9 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         // Видео
-        LinearLayout card = card(root, "Видео");
+        section(root, "Видео");
+        LinearLayout card = card(root);
+        card.setPadding(dp(16), dp(16), dp(16), dp(16));
         FrameLayout preview = new FrameLayout(this);
         preview.setBackgroundResource(R.drawable.thumb_bg);
         preview.setClipToOutline(true);
@@ -141,79 +142,76 @@ public class MainActivity extends Activity {
         preview.addView(thumbnailHint, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER));
-        LinearLayout.LayoutParams previewParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(190));
-        previewParams.leftMargin = dp(20);
-        previewParams.rightMargin = dp(20);
-        previewParams.topMargin = dp(6);
-        card.addView(preview, previewParams);
+        card.addView(preview, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(190)));
         videoName = text("", 14, R.color.text2);
-        videoName.setPadding(dp(24), dp(12), dp(24), 0);
+        videoName.setPadding(dp(8), dp(12), dp(8), 0);
         card.addView(videoName);
         pickButton = button("Выбрать видео", R.drawable.button_tonal, R.color.on_tonal);
         LinearLayout.LayoutParams pickParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(50));
-        pickParams.setMargins(dp(20), dp(14), dp(20), dp(16));
+        pickParams.topMargin = dp(14);
         pickButton.setOnClickListener(v -> pickVideo());
         card.addView(pickButton, pickParams);
 
         // Воспроизведение
-        card = card(root, "Воспроизведение");
-        switchRow(card, Prefs.KEY_LOOP, cfg.loop, "Зациклить",
-                "Видео крутится без остановки");
-        countRow = stepperRow(card);
-        switchRow(card, Prefs.KEY_END_ON_LAST_FRAME, cfg.endOnLastFrame,
+        section(root, "Воспроизведение");
+        switchItem(root, Prefs.KEY_LOOP, cfg.loop, "Зациклить",
+                "Видео крутится без остановки.");
+        countRow = stepperItem(root);
+        switchItem(root, Prefs.KEY_END_ON_LAST_FRAME, cfg.endOnLastFrame,
                 "Замирать на последнем кадре",
-                "Иначе после окончания сразу показывается первый кадр");
-        switchRow(card, Prefs.KEY_SOUND, cfg.sound, "Звук", null);
+                "Иначе после окончания сразу показывается первый кадр.");
+        switchItem(root, Prefs.KEY_SOUND, cfg.sound, "Звук", null);
 
         // Запуск
-        card = card(root, "Запуск");
-        switchRow(card, Prefs.KEY_AFTER_UNLOCK, cfg.afterUnlock, "Только после разблокировки",
-                "На экране блокировки видео ждёт и стартует, когда вы разблокируете телефон");
+        section(root, "Запуск");
+        switchItem(root, Prefs.KEY_AFTER_UNLOCK, cfg.afterUnlock, "Только после разблокировки",
+                "На экране блокировки видео ждёт и стартует, когда вы разблокируете телефон.");
 
         // Блокировка
-        card = card(root, "После блокировки");
-        switchRow(card, Prefs.KEY_REWIND_ON_LOCK, cfg.rewindOnLock, "Возвращать к началу",
-                "После блокировки экрана видео возвращается к первому кадру");
-        switchRow(card, Prefs.KEY_REWIND_REVERSE, cfg.rewindReverse, "Возврат реверсом",
+        section(root, "После блокировки");
+        switchItem(root, Prefs.KEY_REWIND_ON_LOCK, cfg.rewindOnLock, "Возвращать к началу",
+                "После блокировки экрана видео возвращается к первому кадру.");
+        LinearLayout reverseItem = switchItem(root, Prefs.KEY_REWIND_REVERSE, cfg.rewindReverse,
+                "Возврат реверсом",
                 "Видео плавно проигрывается назад на экране блокировки. "
-                        + "Нужна разовая подготовка видео; звук в этом режиме не играет");
+                        + "Нужна разовая подготовка видео; звук в этом режиме не играет.");
         reverseBox = vertical();
-        reverseBox.setPadding(dp(24), 0, dp(24), dp(16));
+        reverseBox.setPadding(dp(24), dp(4), dp(24), 0);
         reverseProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         reverseProgress.setMax(100);
         reverseProgress.setProgressTintList(ColorStateList.valueOf(getColor(R.color.accent)));
         reverseBox.addView(reverseProgress);
         reverseStatus = text("", 14, R.color.accent);
         reverseBox.addView(reverseStatus);
-        card.addView(reverseBox);
+        reverseItem.addView(reverseBox);
 
         // Повтор
-        card = card(root, "Повтор");
-        switchRow(card, Prefs.KEY_REPLAY, cfg.replay, "Проигрывать повторно",
-                "Выключено — видео проиграется один раз и больше не запустится");
-        switchRow(card, Prefs.KEY_REPLAY_AFTER_LOCK, cfg.replayAfterLock,
+        section(root, "Повтор");
+        switchItem(root, Prefs.KEY_REPLAY, cfg.replay, "Проигрывать повторно",
+                "Если выключено, видео проиграется один раз и больше не запустится.");
+        switchItem(root, Prefs.KEY_REPLAY_AFTER_LOCK, cfg.replayAfterLock,
                 "Заново после каждой блокировки",
-                "Вместе с «Только после разблокировки» — при каждой разблокировке");
-        switchRow(card, Prefs.KEY_REPLAY_ON_HOME, cfg.replayOnHome,
+                "Вместе с «Только после разблокировки» — при каждой разблокировке.");
+        switchItem(root, Prefs.KEY_REPLAY_ON_HOME, cfg.replayOnHome,
                 "Заново при возврате на рабочий стол", null);
 
         // Эффекты
-        card = card(root, "Эффекты");
-        switchRow(card, Prefs.KEY_ZOOM_EFFECT, cfg.zoomEffect,
+        section(root, "Эффекты");
+        switchItem(root, Prefs.KEY_ZOOM_EFFECT, cfg.zoomEffect,
                 "Приближение при открытии приложений",
                 "Обои слегка приближаются, когда открыто приложение, "
-                        + "и плавно отдаляются, когда вы возвращаетесь на рабочий стол");
+                        + "и плавно отдаляются, когда вы возвращаетесь на рабочий стол.");
 
         // Дополнительно
-        card = card(root, "Дополнительно");
-        LinearLayout reset = row("Проиграть заново", "Сбросить «уже проиграно» и запустить видео снова");
+        section(root, "Дополнительно");
+        LinearLayout reset = row("Проиграть заново", "Сбросить «уже проиграно»");
         reset.setOnClickListener(v -> {
             Prefs.bumpRevision(this);
             Toast.makeText(this, "Видео проиграется заново", Toast.LENGTH_SHORT).show();
         });
-        card.addView(reset);
+        card(root).addView(reset);
 
         updateEnabled();
         updateVideo();
@@ -512,20 +510,22 @@ public class MainActivity extends Activity {
 
     // ---- Построение интерфейса ----
 
-    /** Карточка с подписью раздела внутри, как в One UI 8. */
-    private LinearLayout card(LinearLayout root, String title) {
+    /** Серая подпись раздела над плашками. */
+    private void section(LinearLayout root, String title) {
+        TextView label = text(title, 14, R.color.text2);
+        label.setTypeface(Typeface.DEFAULT_BOLD);
+        label.setPadding(dp(24), dp(26), dp(24), dp(2));
+        root.addView(label);
+    }
+
+    /** Скруглённая плашка, как в One UI 9. */
+    private LinearLayout card(LinearLayout root) {
         LinearLayout card = vertical();
         card.setBackgroundResource(R.drawable.card_bg);
         card.setClipToOutline(true);
-        card.setPadding(0, 0, 0, dp(6));
-        TextView label = text(title, 14, R.color.text2);
-        label.setTypeface(Typeface.DEFAULT_BOLD);
-        label.setPadding(dp(24), dp(20), dp(24), dp(4));
-        label.setTag(LABEL_TAG);
-        card.addView(label);
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        params.topMargin = dp(16);
+        params.topMargin = dp(12);
         root.addView(card, params);
         return card;
     }
@@ -534,13 +534,13 @@ public class MainActivity extends Activity {
     private Drawable heroBackground() {
         GradientDrawable base = new GradientDrawable();
         base.setColor(getColor(R.color.card));
-        base.setCornerRadius(dp(26));
+        base.setCornerRadius(dp(28));
         GradientDrawable glow = new GradientDrawable();
         glow.setGradientType(GradientDrawable.RADIAL_GRADIENT);
         glow.setColors(new int[] {getColor(R.color.glow), Color.TRANSPARENT});
         glow.setGradientCenter(0.5f, 1.05f);
         glow.setGradientRadius(dp(300));
-        glow.setCornerRadius(dp(26));
+        glow.setCornerRadius(dp(28));
         return new LayerDrawable(new Drawable[] {base, glow});
     }
 
@@ -569,39 +569,36 @@ public class MainActivity extends Activity {
         applyTitleGradient();
     }
 
-    /** Тонкий разделитель между пунктами, с отступами как в One UI. */
-    private void addDividerIfNeeded(LinearLayout card) {
-        int count = card.getChildCount();
-        if (count == 0 || LABEL_TAG.equals(card.getChildAt(count - 1).getTag())) return;
-        View divider = new View(this);
-        divider.setBackgroundColor(getColor(R.color.divider));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, Math.max(1, dp(1) / 2));
-        params.leftMargin = dp(24);
-        params.rightMargin = dp(24);
-        card.addView(divider, params);
-    }
-
-    private void switchRow(LinearLayout card, String key, boolean value, String title,
-                           String subtitle) {
-        LinearLayout row = row(title, subtitle);
+    /**
+     * Пункт с переключателем: отдельная плашка, пояснение серым текстом под ней.
+     * Возвращает контейнер пункта (плашка + пояснение).
+     */
+    private LinearLayout switchItem(LinearLayout root, String key, boolean value, String title,
+                                    String description) {
+        LinearLayout item = vertical();
+        LinearLayout card = card(item);
+        LinearLayout row = row(title, null);
         Switch toggle = new Switch(this);
         toggle.setThumbResource(R.drawable.switch_thumb);
         toggle.setTrackResource(R.drawable.switch_track);
-        toggle.setSwitchMinWidth(dp(46));
+        toggle.setSwitchMinWidth(dp(40));
         toggle.setShowText(false);
+        toggle.setBackground(null);
         toggle.setChecked(value);
         toggle.setOnCheckedChangeListener((button, isChecked) -> onSwitchChanged(key, isChecked));
         row.addView(toggle);
         row.setOnClickListener(v -> toggle.toggle());
-        switches.put(key, toggle);
-        rows.put(key, row);
-        addDividerIfNeeded(card);
         card.addView(row);
+        if (description != null) item.addView(description(description));
+        switches.put(key, toggle);
+        rows.put(key, item);
+        root.addView(item);
+        return item;
     }
 
-    private View stepperRow(LinearLayout card) {
-        LinearLayout row = row("Количество проигрываний", "Сколько раз подряд");
+    private View stepperItem(LinearLayout root) {
+        LinearLayout item = vertical();
+        LinearLayout row = row("Количество проигрываний", null);
         Button minus = roundButton("−");
         minus.setOnClickListener(v -> changeCount(-1));
         countValue = text(String.valueOf(playCount), 18, R.color.text);
@@ -613,17 +610,24 @@ public class MainActivity extends Activity {
         row.addView(minus);
         row.addView(countValue);
         row.addView(plus);
-        addDividerIfNeeded(card);
-        card.addView(row);
-        return row;
+        card(item).addView(row);
+        item.addView(description("Сколько раз подряд проиграть видео."));
+        root.addView(item);
+        return item;
+    }
+
+    private TextView description(String value) {
+        TextView view = text(value, 14, R.color.text2);
+        view.setPadding(dp(24), dp(10), dp(24), dp(4));
+        return view;
     }
 
     private LinearLayout row(String title, String subtitle) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setMinimumHeight(dp(68));
-        row.setPadding(dp(24), dp(14), dp(24), dp(14));
+        row.setMinimumHeight(dp(64));
+        row.setPadding(dp(24), dp(12), dp(20), dp(12));
         TypedValue ripple = new TypedValue();
         getTheme().resolveAttribute(android.R.attr.selectableItemBackground, ripple, true);
         row.setBackgroundResource(ripple.resourceId);

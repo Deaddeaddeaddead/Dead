@@ -1,17 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<selector xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:state_checked="true">
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:width="24dp" android:height="24dp">
+        <shape android:shape="oval">
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+    <item android:bottom="3dp" android:left="3dp" android:right="3dp" android:top="3dp">
         <shape android:shape="oval">
             <solid android:color="#FFFFFF" />
-            <stroke android:width="2dp" android:color="@color/accent" />
-            <size android:width="24dp" android:height="24dp" />
         </shape>
     </item>
-    <item>
-        <shape android:shape="oval">
-            <solid android:color="@color/switch_off_thumb" />
-            <stroke android:width="2dp" android:color="@color/switch_off_stroke" />
-            <size android:width="24dp" android:height="24dp" />
-        </shape>
-    </item>
-</selector>
+</layer-list>

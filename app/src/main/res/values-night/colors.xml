@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="bg">#000000</color>
-    <color name="card">#1C1C1E</color>
+    <color name="card">#1E1E20</color>
     <color name="thumb">#2A2A2C</color>
     <color name="divider">#3A3A3C</color>
     <color name="text">#FAFAFA</color>
@@ -15,9 +15,7 @@
     <color name="glow">#4D2F8FE0</color>
     <color name="gradient_start">#3CC6DE</color>
     <color name="gradient_end">#3D8BFF</color>
-    <color name="switch_off_track">#3A3A3C</color>
-    <color name="switch_off_thumb">#1C1C1E</color>
-    <color name="switch_off_stroke">#8C8C8C</color>
+    <color name="switch_off_track">#5C5C60</color>
     <color name="ripple">#26FFFFFF</color>
     <color name="ripple_on_accent">#33000000</color>
 </resources>
