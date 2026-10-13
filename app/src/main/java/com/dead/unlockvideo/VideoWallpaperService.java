@@ -31,6 +31,11 @@ public class VideoWallpaperService extends WallpaperService {
     private static final int AT_END = Integer.MAX_VALUE;
     /** Как часто проверять разблокировку, пока виден экран блокировки. */
     private static final long UNLOCK_POLL_MS = 100;
+    /**
+     * Отдаление обоев от лаунчера (0 — рабочий стол, 1 — открыто приложение или список
+     * недавних). Когда оно падает ниже этого порога, начался переход на рабочий стол.
+     */
+    private static final float HOME_ZOOM_THRESHOLD = 0.6f;
 
     @Override
     public Engine onCreateEngine() {
@@ -104,6 +109,13 @@ public class VideoWallpaperService extends WallpaperService {
         private boolean deviceLockedAtWake = true;
         /** Экран выключался — при пробуждении нужно заново запомнить состояние блокировки. */
         private boolean sampleOnWake;
+        /** Последнее отдаление обоев, присланное лаунчером. */
+        private float launcherZoom;
+        /** Лаунчер вообще присылает отдаление — по нему можно отличить Recents. */
+        private boolean zoomReported;
+        private int zoomBucket = -1;
+        /** Вернулись из приложения, но пока в списке недавних — ждём рабочего стола. */
+        private boolean pendingHome;
 
         /** Пока виден экран блокировки, следим за разблокировкой (лицо, задержки системы). */
         private final Runnable unlockWatch = new Runnable() {
@@ -200,6 +212,7 @@ public class VideoWallpaperService extends WallpaperService {
                     + !unlockedNow() + ") " + state());
             if (!isVisible) {
                 handler.removeCallbacks(unlockWatch);
+                pendingHome = false;
                 hiddenByApp = power.isInteractive() && unlocked;
                 pauseAll();
                 return;
@@ -208,11 +221,37 @@ public class VideoWallpaperService extends WallpaperService {
             hiddenByApp = false;
             watchUnlock();
             if (backFromApp && cfg.startOnHome && !isPreview()) {
-                triggerForward(true);
+                if (cfg.startInRecents || !zoomReported || launcherZoom < HOME_ZOOM_THRESHOLD) {
+                    triggerForward(true);
+                } else {
+                    // Обои видны, но обои ещё отдалены — это список недавних приложений.
+                    pendingHome = true;
+                    log("ждём перехода на рабочий стол (отдаление " + launcherZoom + ")");
+                }
             } else if (!unlocked && needReverse) {
                 startReverse();
             } else {
                 resume();
+            }
+        }
+
+        /**
+         * Лаунчер сообщает, насколько отдалены обои. Масштабирует их система сама,
+         * здесь это нужно только чтобы отличить список недавних от рабочего стола.
+         */
+        @Override
+        public void onZoomChanged(float zoom) {
+            launcherZoom = zoom;
+            if (zoom > 0.01f) zoomReported = true;
+            int bucket = zoom < 0.05f ? 0 : zoom < HOME_ZOOM_THRESHOLD ? 1 : zoom < 0.95f ? 2 : 3;
+            if (bucket != zoomBucket) {
+                zoomBucket = bucket;
+                log("отдаление " + String.format(java.util.Locale.ROOT, "%.2f", zoom));
+            }
+            if (pendingHome && visible && zoom < HOME_ZOOM_THRESHOLD) {
+                pendingHome = false;
+                log("переход на рабочий стол");
+                triggerForward(true);
             }
         }
 

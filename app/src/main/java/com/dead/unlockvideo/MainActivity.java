@@ -75,6 +75,7 @@ public class MainActivity extends Activity {
     private Segmented lockChoice;
     private TextView lockDescription;
     private TextView noTriggerWarning;
+    private View recentsItem;
     private LinearLayout reverseBox;
     private ProgressBar reverseProgress;
     private TextView reverseStatus;
@@ -170,7 +171,12 @@ public class MainActivity extends Activity {
                 "Видео играет прямо на экране блокировки, ещё до разблокировки.");
         switchItem(root, Prefs.KEY_START_ON_HOME, cfg.startOnHome,
                 "При возврате на рабочий стол",
-                "Видео запускается с начала, когда вы выходите из приложения.");
+                "Видео запускается с начала, когда вы выходите из приложения "
+                        + "и начинается переход на рабочий стол.");
+        recentsItem = switchItem(root, Prefs.KEY_START_IN_RECENTS, cfg.startInRecents,
+                "Также в списке недавних приложений",
+                "Запускать уже при открытии списка недавних приложений (Recents), "
+                        + "не дожидаясь перехода на рабочий стол.");
         switchItem(root, Prefs.KEY_ONCE, cfg.once, "Только один раз",
                 "После первого проигрывания видео больше не запускается. "
                         + "Запустить снова — «Проиграть сейчас» внизу.");
@@ -307,6 +313,7 @@ public class MainActivity extends Activity {
         boolean anyTrigger = checked(Prefs.KEY_START_ON_UNLOCK)
                 || checked(Prefs.KEY_START_ON_SCREEN_ON) || checked(Prefs.KEY_START_ON_HOME);
         noTriggerWarning.setVisibility(anyTrigger ? View.GONE : View.VISIBLE);
+        setRowEnabled(recentsItem, checked(Prefs.KEY_START_ON_HOME));
         switch (lockChoice.selected) {
             case Prefs.LOCK_KEEP:
                 lockDescription.setText("Видео остаётся на том же кадре и продолжает "

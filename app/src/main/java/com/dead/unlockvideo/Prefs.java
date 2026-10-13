@@ -14,6 +14,7 @@ final class Prefs {
     static final String KEY_START_ON_UNLOCK = "start_on_unlock";
     static final String KEY_START_ON_SCREEN_ON = "start_on_screen_on";
     static final String KEY_START_ON_HOME = "start_on_home";
+    static final String KEY_START_IN_RECENTS = "start_in_recents";
     static final String KEY_ONCE = "once";
     // Как проигрывать
     static final String KEY_PLAYS = "plays";
@@ -49,6 +50,7 @@ final class Prefs {
     final boolean startOnUnlock;
     final boolean startOnScreenOn;
     final boolean startOnHome;
+    final boolean startInRecents;
     final boolean once;
     final int plays;
     final boolean endOnLastFrame;
@@ -62,6 +64,7 @@ final class Prefs {
         startOnUnlock = sp.getBoolean(KEY_START_ON_UNLOCK, true);
         startOnScreenOn = sp.getBoolean(KEY_START_ON_SCREEN_ON, false);
         startOnHome = sp.getBoolean(KEY_START_ON_HOME, false);
+        startInRecents = sp.getBoolean(KEY_START_IN_RECENTS, false);
         once = sp.getBoolean(KEY_ONCE, false);
         int p = sp.getInt(KEY_PLAYS, 1);
         plays = p == INFINITE ? INFINITE : Math.max(1, Math.min(MAX_PLAYS, p));
