@@ -76,6 +76,8 @@ public class MainActivity extends Activity {
     private TextView lockDescription;
     private TextView noTriggerWarning;
     private View recentsItem;
+    private LinearLayout screenOnItem;
+    private TextView screenOnNote;
     private LinearLayout reverseBox;
     private ProgressBar reverseProgress;
     private TextView reverseStatus;
@@ -166,9 +168,13 @@ public class MainActivity extends Activity {
         section(root, "Когда запускать");
         switchItem(root, Prefs.KEY_START_ON_UNLOCK, cfg.startOnUnlock, "При разблокировке",
                 "Видео запускается каждый раз, когда вы разблокируете телефон.");
-        switchItem(root, Prefs.KEY_START_ON_SCREEN_ON, cfg.startOnScreenOn,
+        screenOnItem = switchItem(root, Prefs.KEY_START_ON_SCREEN_ON, cfg.startOnScreenOn,
                 "При включении экрана",
                 "Видео играет прямо на экране блокировки, ещё до разблокировки.");
+        screenOnNote = description("Недоступно при возврате «Реверсом»: на экране блокировки "
+                + "играет реверс, а вперёд — после разблокировки.");
+        screenOnNote.setTextColor(getColor(R.color.accent));
+        root.addView(screenOnNote);
         switchItem(root, Prefs.KEY_START_ON_HOME, cfg.startOnHome,
                 "При возврате на рабочий стол",
                 "Видео запускается с начала, когда вы выходите из приложения "
@@ -314,6 +320,9 @@ public class MainActivity extends Activity {
                 || checked(Prefs.KEY_START_ON_SCREEN_ON) || checked(Prefs.KEY_START_ON_HOME);
         noTriggerWarning.setVisibility(anyTrigger ? View.GONE : View.VISIBLE);
         setRowEnabled(recentsItem, checked(Prefs.KEY_START_ON_HOME));
+        boolean reverse = lockChoice.selected == Prefs.LOCK_REVERSE;
+        setRowEnabled(screenOnItem, !reverse);
+        screenOnNote.setVisibility(reverse ? View.VISIBLE : View.GONE);
         switch (lockChoice.selected) {
             case Prefs.LOCK_KEEP:
                 lockDescription.setText("Видео остаётся на том же кадре и продолжает "

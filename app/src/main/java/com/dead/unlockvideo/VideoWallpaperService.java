@@ -238,6 +238,7 @@ public class VideoWallpaperService extends WallpaperService {
             watchUnlock();
             if (backFromApp && cfg.startOnHome && !isPreview()) {
                 if (cfg.startInRecents || !zoomReported || launcherZoom < HOME_ZOOM_THRESHOLD) {
+                    log("запуск: возврат на рабочий стол");
                     triggerForward(true);
                 } else {
                     // Обои видны, но обои ещё отдалены — это список недавних приложений.
@@ -301,7 +302,8 @@ public class VideoWallpaperService extends WallpaperService {
                 return;
             }
             watchUnlock();
-            if (cfg.startOnScreenOn) {
+            if (startOnScreenOn()) {
+                log("запуск: включение экрана");
                 triggerForward(false);
             } else if (visible && !unlocked && needReverse) {
                 startReverse();
@@ -322,6 +324,7 @@ public class VideoWallpaperService extends WallpaperService {
             handler.removeCallbacks(unlockWatch);
             if (reversing) stopReverse();
             if (cfg.startOnUnlock) {
+                log("запуск: разблокировка");
                 triggerForward(false);
             } else {
                 if (needReverse) {
@@ -397,9 +400,18 @@ public class VideoWallpaperService extends WallpaperService {
             if (visible && !unlocked) handler.postDelayed(unlockWatch, UNLOCK_POLL_MS);
         }
 
+        /**
+         * Играть ли вперёд прямо на экране блокировки. При возврате реверсом — нет:
+         * там играет реверс, а вперёд — после разблокировки.
+         */
+        private boolean startOnScreenOn() {
+            return cfg.startOnScreenOn
+                    && !(cfg.lockAction == Prefs.LOCK_REVERSE && reverseAvailable);
+        }
+
         /** Играть вперёд можно, когда обои видны и телефон разблокирован (или так настроено). */
         private boolean canPlayForward() {
-            return visible && (unlocked || cfg.startOnScreenOn);
+            return visible && (unlocked || startOnScreenOn());
         }
 
         /**
