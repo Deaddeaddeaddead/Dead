@@ -58,7 +58,6 @@ public class MainActivity extends Activity {
 
     private SharedPreferences sp;
     private final Map<String, Switch> switches = new HashMap<>();
-    private final Map<String, View> rows = new HashMap<>();
     private ImageView thumbnail;
     private TextView thumbnailHint;
     private TextView videoName;
@@ -67,9 +66,12 @@ public class MainActivity extends Activity {
     private TextView heroTitle;
     private TextView heroSubtitle;
     private boolean wallpaperActive;
-    private View countRow;
     private TextView countValue;
-    private int playCount;
+    private int plays;
+    private Segmented endChoice;
+    private Segmented lockChoice;
+    private TextView lockDescription;
+    private TextView noTriggerWarning;
     private LinearLayout reverseBox;
     private ProgressBar reverseProgress;
     private TextView reverseStatus;
@@ -79,9 +81,9 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         sp = Prefs.prefs(this);
         Prefs cfg = Prefs.load(this);
-        playCount = cfg.playCount;
+        plays = cfg.plays;
 
-        // Компактная верхняя панель и прокручиваемые карточки, как в One UI 8.
+        // Компактная верхняя панель и прокручиваемые карточки, как в One UI 9.
         LinearLayout screen = vertical();
         screen.setFitsSystemWindows(true);
         TextView appTitle = text(getString(R.string.app_name), 22, R.color.text);
@@ -154,33 +156,42 @@ public class MainActivity extends Activity {
         pickButton.setOnClickListener(v -> pickVideo());
         card.addView(pickButton, pickParams);
 
-        // Воспроизведение
-        section(root, "Воспроизведение");
-        switchItem(root, Prefs.KEY_LOOP, cfg.loop, "Зациклить",
-                "Видео крутится без остановки.");
-        countRow = stepperItem(root);
-        switchItem(root, Prefs.KEY_END_ON_LAST_FRAME, cfg.endOnLastFrame,
-                "Замирать на последнем кадре",
-                "Иначе после окончания сразу показывается первый кадр.");
-        switchItem(root, Prefs.KEY_SOUND, cfg.sound, "Звук", null);
-
-        // Запуск
-        section(root, "Запуск");
-        switchItem(root, Prefs.KEY_AFTER_UNLOCK, cfg.afterUnlock, "Только после разблокировки",
-                "На экране блокировки видео ждёт и стартует, когда вы разблокируете телефон.");
-        switchItem(root, Prefs.KEY_REPLAY_ON_HOME, cfg.replayOnHome,
+        // Когда запускать
+        section(root, "Когда запускать");
+        switchItem(root, Prefs.KEY_START_ON_UNLOCK, cfg.startOnUnlock, "При разблокировке",
+                "Видео запускается каждый раз, когда вы разблокируете телефон.");
+        switchItem(root, Prefs.KEY_START_ON_SCREEN_ON, cfg.startOnScreenOn,
+                "При включении экрана",
+                "Видео играет прямо на экране блокировки, ещё до разблокировки.");
+        switchItem(root, Prefs.KEY_START_ON_HOME, cfg.startOnHome,
                 "При возврате на рабочий стол",
-                "Видео проигрывается заново каждый раз, когда вы выходите из приложения "
-                        + "на рабочий стол. Работает независимо от раздела «Повтор».");
+                "Видео запускается с начала, когда вы выходите из приложения.");
+        switchItem(root, Prefs.KEY_ONCE, cfg.once, "Только один раз",
+                "После первого проигрывания видео больше не запускается. "
+                        + "Запустить снова — «Проиграть сейчас» внизу.");
+        noTriggerWarning = description("Не выбрано ни одного запуска — "
+                + "видео будет стоять на первом кадре.");
+        noTriggerWarning.setTextColor(getColor(R.color.accent));
+        root.addView(noTriggerWarning);
 
-        // Блокировка
-        section(root, "После блокировки");
-        switchItem(root, Prefs.KEY_REWIND_ON_LOCK, cfg.rewindOnLock, "Возвращать к началу",
-                "После блокировки экрана видео возвращается к первому кадру.");
-        LinearLayout reverseItem = switchItem(root, Prefs.KEY_REWIND_REVERSE, cfg.rewindReverse,
-                "Возврат реверсом",
-                "Видео плавно проигрывается назад на экране блокировки. "
-                        + "Нужна разовая подготовка видео; звук в этом режиме не играет.");
+        // Как проигрывать
+        section(root, "Как проигрывать");
+        stepperItem(root);
+        endChoice = segmented(root, "После окончания",
+                new String[] {"Последний кадр", "Первый кадр"},
+                cfg.endOnLastFrame ? 0 : 1, index -> {
+                    sp.edit().putBoolean(Prefs.KEY_END_ON_LAST_FRAME, index == 0).apply();
+                    Prefs.bumpRevision(this);
+                });
+        endChoice.item.addView(description("На каком кадре остановиться, когда видео доиграет."));
+
+        // При блокировке
+        section(root, "При блокировке экрана");
+        lockChoice = segmented(root, "Видео",
+                new String[] {"Оставить", "К началу", "Реверсом"},
+                cfg.lockAction, this::onLockActionChanged);
+        lockDescription = description("");
+        lockChoice.item.addView(lockDescription);
         reverseBox = vertical();
         reverseBox.setPadding(dp(24), dp(4), dp(24), 0);
         reverseProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -189,36 +200,27 @@ public class MainActivity extends Activity {
         reverseBox.addView(reverseProgress);
         reverseStatus = text("", 14, R.color.accent);
         reverseBox.addView(reverseStatus);
-        reverseItem.addView(reverseBox);
+        lockChoice.item.addView(reverseBox);
 
-        // Повтор
-        section(root, "Повтор");
-        switchItem(root, Prefs.KEY_REPLAY, cfg.replay, "Проигрывать повторно",
-                "Если выключено, видео проиграется один раз и больше не запустится.");
-        switchItem(root, Prefs.KEY_REPLAY_AFTER_LOCK, cfg.replayAfterLock,
-                "Заново после каждой блокировки",
-                "Вместе с «Только после разблокировки» — при каждой разблокировке.");
-
-        // Эффекты
-        section(root, "Эффекты");
+        // Дополнительно
+        section(root, "Дополнительно");
+        switchItem(root, Prefs.KEY_SOUND, cfg.sound, "Звук", null);
         switchItem(root, Prefs.KEY_ZOOM_EFFECT, cfg.zoomEffect,
                 "Приближение при открытии приложений",
                 "Обои слегка приближаются, когда открыто приложение, "
                         + "и плавно отдаляются, когда вы возвращаетесь на рабочий стол.");
-
-        // Дополнительно
-        section(root, "Дополнительно");
-        LinearLayout reset = row("Проиграть заново", "Сбросить «уже проиграно»");
-        reset.setOnClickListener(v -> {
-            Prefs.bumpRevision(this);
-            Toast.makeText(this, "Видео проиграется заново", Toast.LENGTH_SHORT).show();
+        LinearLayout playNow = row("Проиграть сейчас", "Запустить видео с начала");
+        playNow.setOnClickListener(v -> {
+            Prefs.playNow(this);
+            Toast.makeText(this, "Видео запустится, когда вы вернётесь на рабочий стол",
+                    Toast.LENGTH_SHORT).show();
         });
-        card(root).addView(reset);
+        card(root).addView(playNow);
 
         updateEnabled();
         updateVideo();
         // Реверс включён, но ролик не готов или подготовлен старым способом — готовим.
-        if (cfg.rewindReverse && !cfg.reverseReady) ensureReverse(getApplicationContext());
+        if (cfg.wantsReverse() && !cfg.reverseReady) ensureReverse(getApplicationContext());
         updateReverseStatus();
     }
 
@@ -241,8 +243,17 @@ public class MainActivity extends Activity {
     // ---- Настройки ----
 
     private void onSwitchChanged(String key, boolean checked) {
-        sp.edit().putBoolean(key, checked).apply();
-        if (Prefs.KEY_REWIND_REVERSE.equals(key) && checked) {
+        SharedPreferences.Editor editor = sp.edit().putBoolean(key, checked);
+        // Выключили «Только один раз» — забываем, что видео уже отыграло.
+        if (Prefs.KEY_ONCE.equals(key) && !checked) editor.putBoolean(Prefs.KEY_FINISHED, false);
+        editor.apply();
+        Prefs.bumpRevision(this);
+        updateEnabled();
+    }
+
+    private void onLockActionChanged(int action) {
+        sp.edit().putInt(Prefs.KEY_LOCK_ACTION, action).apply();
+        if (action == Prefs.LOCK_REVERSE) {
             reverseError = null;
             ensureReverse(getApplicationContext());
         }
@@ -251,13 +262,32 @@ public class MainActivity extends Activity {
         updateReverseStatus();
     }
 
+    /** 1, 2, … MAX_PLAYS, затем ∞. */
     private void changeCount(int delta) {
-        int value = Math.max(1, Math.min(Prefs.MAX_PLAY_COUNT, playCount + delta));
-        if (value == playCount) return;
-        playCount = value;
-        countValue.setText(String.valueOf(value));
-        sp.edit().putInt(Prefs.KEY_PLAY_COUNT, value).apply();
+        int value;
+        if (delta > 0) {
+            value = plays == Prefs.INFINITE ? Prefs.INFINITE
+                    : plays >= Prefs.MAX_PLAYS ? Prefs.INFINITE : plays + 1;
+        } else {
+            value = plays == Prefs.INFINITE ? Prefs.MAX_PLAYS : Math.max(1, plays - 1);
+        }
+        if (value == plays) return;
+        plays = value;
+        countValue.setText(countLabel());
+        SharedPreferences.Editor editor = sp.edit().putInt(Prefs.KEY_PLAYS, value);
+        // Реверс при бесконечном повторе невозможен — возвращаем к началу мгновенно.
+        if (value == Prefs.INFINITE && lockChoice.selected == Prefs.LOCK_REVERSE) {
+            editor.putInt(Prefs.KEY_LOCK_ACTION, Prefs.LOCK_REWIND);
+            lockChoice.select(Prefs.LOCK_REWIND);
+        }
+        editor.apply();
         Prefs.bumpRevision(this);
+        updateEnabled();
+        updateReverseStatus();
+    }
+
+    private String countLabel() {
+        return plays == Prefs.INFINITE ? "∞" : String.valueOf(plays);
     }
 
     private boolean checked(String key) {
@@ -265,14 +295,26 @@ public class MainActivity extends Activity {
     }
 
     private void updateEnabled() {
-        boolean finite = !checked(Prefs.KEY_LOOP);
-        setRowEnabled(countRow, finite);
-        setRowEnabled(rows.get(Prefs.KEY_END_ON_LAST_FRAME), finite);
-        setRowEnabled(rows.get(Prefs.KEY_REWIND_ON_LOCK), finite);
-        setRowEnabled(rows.get(Prefs.KEY_REWIND_REVERSE),
-                finite && checked(Prefs.KEY_REWIND_ON_LOCK));
-        boolean replay = checked(Prefs.KEY_REPLAY);
-        setRowEnabled(rows.get(Prefs.KEY_REPLAY_AFTER_LOCK), replay);
+        boolean finite = plays != Prefs.INFINITE;
+        setRowEnabled(endChoice.item, finite);
+        lockChoice.setOptionEnabled(Prefs.LOCK_REVERSE, finite);
+        boolean anyTrigger = checked(Prefs.KEY_START_ON_UNLOCK)
+                || checked(Prefs.KEY_START_ON_SCREEN_ON) || checked(Prefs.KEY_START_ON_HOME);
+        noTriggerWarning.setVisibility(anyTrigger ? View.GONE : View.VISIBLE);
+        switch (lockChoice.selected) {
+            case Prefs.LOCK_KEEP:
+                lockDescription.setText("Видео остаётся на том же кадре и продолжает "
+                        + "с этого места.");
+                break;
+            case Prefs.LOCK_REVERSE:
+                lockDescription.setText("Видео плавно проигрывается назад на экране "
+                        + "блокировки. Нужна разовая подготовка видео; звук в этом режиме "
+                        + "не играет.");
+                break;
+            default:
+                lockDescription.setText("Пока экран выключен, видео возвращается "
+                        + "к первому кадру.");
+        }
     }
 
     private void setRowEnabled(View row, boolean enabled) {
@@ -367,8 +409,8 @@ public class MainActivity extends Activity {
                             .putBoolean(Prefs.KEY_REVERSE_READY, false)
                             .apply();
                     reverseError = null;
-                    if (Prefs.load(app).rewindReverse) ensureReverse(app);
-                    Prefs.bumpRevision(app);
+                    if (Prefs.load(app).wantsReverse()) ensureReverse(app);
+                    Prefs.playNow(app);
                 } else {
                     Toast.makeText(app, "Не удалось скопировать видео: " + finalError,
                             Toast.LENGTH_LONG).show();
@@ -449,7 +491,7 @@ public class MainActivity extends Activity {
                     // Пока готовили, выбрали другое видео — готовим заново.
                     //noinspection ResultOfMethodCallIgnored
                     output.delete();
-                    if (Prefs.load(app).rewindReverse) ensureReverse(app);
+                    if (Prefs.load(app).wantsReverse()) ensureReverse(app);
                 } else if (finalResult != null) {
                     prefs.edit()
                             .putBoolean(Prefs.KEY_REVERSE_READY, true)
@@ -460,10 +502,12 @@ public class MainActivity extends Activity {
                     Prefs.bumpRevision(app);
                 } else {
                     reverseError = finalError;
-                    prefs.edit().putBoolean(Prefs.KEY_REWIND_REVERSE, false).apply();
+                    prefs.edit().putInt(Prefs.KEY_LOCK_ACTION, Prefs.LOCK_REWIND).apply();
                     Prefs.bumpRevision(app);
-                    if (shown != null) shown.switches.get(Prefs.KEY_REWIND_REVERSE)
-                            .setChecked(false);
+                    if (shown != null) {
+                        shown.lockChoice.select(Prefs.LOCK_REWIND);
+                        shown.updateEnabled();
+                    }
                 }
                 refreshShown();
             });
@@ -475,7 +519,7 @@ public class MainActivity extends Activity {
     }
 
     private void updateReverseStatus() {
-        boolean wanted = checked(Prefs.KEY_REWIND_REVERSE);
+        boolean wanted = lockChoice.selected == Prefs.LOCK_REVERSE;
         boolean ready = Prefs.load(this).reverseReady;
         if (reverseRunning) {
             reverseBox.setVisibility(View.VISIBLE);
@@ -595,17 +639,16 @@ public class MainActivity extends Activity {
         card.addView(row);
         if (description != null) item.addView(description(description));
         switches.put(key, toggle);
-        rows.put(key, item);
         root.addView(item);
         return item;
     }
 
-    private View stepperItem(LinearLayout root) {
+    private void stepperItem(LinearLayout root) {
         LinearLayout item = vertical();
-        LinearLayout row = row("Количество проигрываний", null);
+        LinearLayout row = row("Сколько раз подряд", null);
         Button minus = roundButton("−");
         minus.setOnClickListener(v -> changeCount(-1));
-        countValue = text(String.valueOf(playCount), 18, R.color.text);
+        countValue = text(countLabel(), 18, R.color.text);
         countValue.setTypeface(Typeface.DEFAULT_BOLD);
         countValue.setGravity(Gravity.CENTER);
         countValue.setMinWidth(dp(44));
@@ -615,9 +658,70 @@ public class MainActivity extends Activity {
         row.addView(countValue);
         row.addView(plus);
         card(item).addView(row);
-        item.addView(description("Сколько раз подряд проиграть видео."));
+        item.addView(description("После " + Prefs.MAX_PLAYS + " идёт ∞ — бесконечный повтор."));
         root.addView(item);
-        return item;
+    }
+
+    interface OnSelect {
+        void onSelect(int index);
+    }
+
+    /** Выбор одного варианта из нескольких — «таблетки» в плашке, как в One UI. */
+    private final class Segmented {
+        final LinearLayout item = vertical();
+        final TextView[] options;
+        int selected;
+
+        Segmented(String title, String[] labels, int initial, OnSelect listener) {
+            LinearLayout card = card(item);
+            TextView header = text(title, 17, R.color.text);
+            header.setPadding(dp(24), dp(16), dp(24), dp(10));
+            card.addView(header);
+            LinearLayout bar = new LinearLayout(MainActivity.this);
+            bar.setBackgroundResource(R.drawable.segment_bg);
+            bar.setPadding(dp(4), dp(4), dp(4), dp(4));
+            options = new TextView[labels.length];
+            for (int i = 0; i < labels.length; i++) {
+                TextView option = text(labels[i], 15, R.color.text);
+                option.setGravity(Gravity.CENTER);
+                option.setTypeface(Typeface.DEFAULT_BOLD);
+                option.setMaxLines(1);
+                final int index = i;
+                option.setOnClickListener(v -> {
+                    if (selected == index) return;
+                    select(index);
+                    listener.onSelect(index);
+                });
+                bar.addView(option, new LinearLayout.LayoutParams(0, dp(40), 1f));
+                options[i] = option;
+            }
+            LinearLayout.LayoutParams barParams = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            barParams.setMargins(dp(16), 0, dp(16), dp(16));
+            card.addView(bar, barParams);
+            select(initial);
+        }
+
+        void select(int index) {
+            selected = index;
+            for (int i = 0; i < options.length; i++) {
+                boolean on = i == index;
+                options[i].setBackgroundResource(on ? R.drawable.segment_selected : 0);
+                options[i].setTextColor(getColor(on ? R.color.on_accent : R.color.text));
+            }
+        }
+
+        void setOptionEnabled(int index, boolean enabled) {
+            options[index].setEnabled(enabled);
+            options[index].setAlpha(enabled ? 1f : 0.35f);
+        }
+    }
+
+    private Segmented segmented(LinearLayout root, String title, String[] labels, int initial,
+                                OnSelect listener) {
+        Segmented segmented = new Segmented(title, labels, initial, listener);
+        root.addView(segmented.item);
+        return segmented;
     }
 
     private TextView description(String value) {

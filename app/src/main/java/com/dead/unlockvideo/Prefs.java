@@ -5,19 +5,25 @@ import android.content.SharedPreferences;
 
 import java.io.File;
 
-/** Настройки обоев. По умолчанию: один раз, только после разблокировки, после блокировки — к началу. */
+/**
+ * Настройки обоев. По умолчанию: видео проигрывается один раз при каждой разблокировке,
+ * замирает на последнем кадре, после блокировки возвращается к началу.
+ */
 final class Prefs {
-    static final String KEY_LOOP = "loop";
-    static final String KEY_PLAY_COUNT = "play_count";
+    // Когда запускать
+    static final String KEY_START_ON_UNLOCK = "start_on_unlock";
+    static final String KEY_START_ON_SCREEN_ON = "start_on_screen_on";
+    static final String KEY_START_ON_HOME = "start_on_home";
+    static final String KEY_ONCE = "once";
+    // Как проигрывать
+    static final String KEY_PLAYS = "plays";
     static final String KEY_END_ON_LAST_FRAME = "end_on_last_frame";
+    // При блокировке экрана
+    static final String KEY_LOCK_ACTION = "lock_action";
+    // Дополнительно
     static final String KEY_SOUND = "sound";
-    static final String KEY_AFTER_UNLOCK = "after_unlock";
-    static final String KEY_REPLAY = "replay";
-    static final String KEY_REPLAY_AFTER_LOCK = "replay_after_lock";
-    static final String KEY_REPLAY_ON_HOME = "replay_on_home";
-    static final String KEY_REWIND_ON_LOCK = "rewind_on_lock";
-    static final String KEY_REWIND_REVERSE = "rewind_reverse";
     static final String KEY_ZOOM_EFFECT = "zoom_effect";
+
     static final String KEY_VIDEO_NAME = "video_name";
     /** Меняется при каждом новом видео — чтобы не принять реверс от старого. */
     static final String KEY_VIDEO_VERSION = "video_version";
@@ -27,23 +33,29 @@ final class Prefs {
     /** Версия способа подготовки реверса; при смене старый ролик готовится заново. */
     static final String KEY_REVERSE_FORMAT = "reverse_format";
     static final int REVERSE_FORMAT = 2;
-    /** Видео уже отыграло и повтор выключен — больше не запускать. */
+    /** Видео уже отыграло в режиме «Только один раз» — больше не запускать. */
     static final String KEY_FINISHED = "finished";
-    /** Меняется при любом изменении настроек; обои перезагружаются по нему. */
+    /** Меняется при изменении настроек; обои перечитывают их, не сбрасывая состояние. */
     static final String KEY_REVISION = "revision";
+    /** Меняется по «Проиграть сейчас» и при новом видео: обои запускают видео с начала. */
+    static final String KEY_PLAY_NOW = "play_now";
 
-    static final int MAX_PLAY_COUNT = 100;
+    /** plays == INFINITE — бесконечный повтор. */
+    static final int INFINITE = 0;
+    static final int MAX_PLAYS = 20;
 
-    final boolean loop;
-    final int playCount;
+    static final int LOCK_KEEP = 0;
+    static final int LOCK_REWIND = 1;
+    static final int LOCK_REVERSE = 2;
+
+    final boolean startOnUnlock;
+    final boolean startOnScreenOn;
+    final boolean startOnHome;
+    final boolean once;
+    final int plays;
     final boolean endOnLastFrame;
+    final int lockAction;
     final boolean sound;
-    final boolean afterUnlock;
-    final boolean replay;
-    final boolean replayAfterLock;
-    final boolean replayOnHome;
-    final boolean rewindOnLock;
-    final boolean rewindReverse;
     final boolean zoomEffect;
     final boolean reverseReady;
     final int reverseLastMs;
@@ -51,22 +63,31 @@ final class Prefs {
     final boolean finished;
 
     private Prefs(SharedPreferences sp) {
-        loop = sp.getBoolean(KEY_LOOP, false);
-        playCount = Math.max(1, Math.min(MAX_PLAY_COUNT, sp.getInt(KEY_PLAY_COUNT, 1)));
+        startOnUnlock = sp.getBoolean(KEY_START_ON_UNLOCK, true);
+        startOnScreenOn = sp.getBoolean(KEY_START_ON_SCREEN_ON, false);
+        startOnHome = sp.getBoolean(KEY_START_ON_HOME, false);
+        once = sp.getBoolean(KEY_ONCE, false);
+        int p = sp.getInt(KEY_PLAYS, 1);
+        plays = p == INFINITE ? INFINITE : Math.max(1, Math.min(MAX_PLAYS, p));
         endOnLastFrame = sp.getBoolean(KEY_END_ON_LAST_FRAME, true);
+        int lock = sp.getInt(KEY_LOCK_ACTION, LOCK_REWIND);
+        lockAction = lock >= LOCK_KEEP && lock <= LOCK_REVERSE ? lock : LOCK_REWIND;
         sound = sp.getBoolean(KEY_SOUND, false);
-        afterUnlock = sp.getBoolean(KEY_AFTER_UNLOCK, true);
-        replay = sp.getBoolean(KEY_REPLAY, false);
-        replayAfterLock = sp.getBoolean(KEY_REPLAY_AFTER_LOCK, true);
-        replayOnHome = sp.getBoolean(KEY_REPLAY_ON_HOME, false);
-        rewindOnLock = sp.getBoolean(KEY_REWIND_ON_LOCK, true);
-        rewindReverse = sp.getBoolean(KEY_REWIND_REVERSE, false);
         zoomEffect = sp.getBoolean(KEY_ZOOM_EFFECT, false);
         reverseReady = sp.getBoolean(KEY_REVERSE_READY, false)
                 && sp.getInt(KEY_REVERSE_FORMAT, 1) == REVERSE_FORMAT;
         reverseLastMs = sp.getInt(KEY_REVERSE_LAST_MS, 0);
         reverseSplitMs = sp.getInt(KEY_REVERSE_SPLIT_MS, 0);
         finished = sp.getBoolean(KEY_FINISHED, false);
+    }
+
+    boolean infinite() {
+        return plays == INFINITE;
+    }
+
+    /** Нужен ли ролик «вперёд + назад»: реверс выбран и повтор не бесконечный. */
+    boolean wantsReverse() {
+        return lockAction == LOCK_REVERSE && !infinite();
     }
 
     static SharedPreferences prefs(Context context) {
@@ -86,11 +107,16 @@ final class Prefs {
         return new File(context.getFilesDir(), "wallpaper_video_pingpong.mp4");
     }
 
-    /** Сбрасывает «уже проиграно» и заставляет обои перечитать настройки. */
+    /** Обои перечитают настройки, не трогая текущее воспроизведение. */
     static void bumpRevision(Context context) {
+        prefs(context).edit().putLong(KEY_REVISION, System.nanoTime()).apply();
+    }
+
+    /** Сбросить «уже проиграно» и запустить видео с начала. */
+    static void playNow(Context context) {
         prefs(context).edit()
                 .putBoolean(KEY_FINISHED, false)
-                .putLong(KEY_REVISION, System.nanoTime())
+                .putLong(KEY_PLAY_NOW, System.nanoTime())
                 .apply();
     }
 }
