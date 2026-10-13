@@ -179,8 +179,8 @@ public class VideoWallpaperService extends WallpaperService {
                 context.registerReceiver(screenReceiver, filter);
             }
 
-            unlocked = unlockedNow();
             loadConfig();
+            unlocked = unlockedNow();
             phase = finishedForever ? PHASE_DONE : PHASE_WAITING;
             log("обои запущены, реверс " + (reverseAvailable ? "готов" : "недоступен"));
             positionMs = finishedForever && cfg.endOnLastFrame && cfg.lockAction == Prefs.LOCK_KEEP
@@ -382,7 +382,7 @@ public class VideoWallpaperService extends WallpaperService {
             if (!keyguard.isKeyguardLocked()) return true;
             // Экран блокировки ещё показан: разблокировано, только если личность
             // подтвердили уже на нём (например, лицом).
-            return keyguard.isKeyguardSecure() && deviceLockedAtWake
+            return cfg.unlockOnLockscreen && keyguard.isKeyguardSecure() && deviceLockedAtWake
                     && !keyguard.isDeviceLocked();
         }
 

@@ -13,6 +13,7 @@ final class Prefs {
     // Когда запускать
     static final String KEY_START_ON_UNLOCK = "start_on_unlock";
     static final String KEY_START_ON_SCREEN_ON = "start_on_screen_on";
+    static final String KEY_UNLOCK_ON_LOCKSCREEN = "unlock_on_lockscreen";
     static final String KEY_START_ON_HOME = "start_on_home";
     static final String KEY_START_IN_RECENTS = "start_in_recents";
     static final String KEY_ONCE = "once";
@@ -49,6 +50,8 @@ final class Prefs {
 
     final boolean startOnUnlock;
     final boolean startOnScreenOn;
+    /** Считать разблокировкой подтверждение личности прямо на экране блокировки (лицом). */
+    final boolean unlockOnLockscreen;
     final boolean startOnHome;
     final boolean startInRecents;
     final boolean once;
@@ -63,6 +66,7 @@ final class Prefs {
     private Prefs(SharedPreferences sp) {
         startOnUnlock = sp.getBoolean(KEY_START_ON_UNLOCK, true);
         startOnScreenOn = sp.getBoolean(KEY_START_ON_SCREEN_ON, false);
+        unlockOnLockscreen = sp.getBoolean(KEY_UNLOCK_ON_LOCKSCREEN, true);
         startOnHome = sp.getBoolean(KEY_START_ON_HOME, false);
         startInRecents = sp.getBoolean(KEY_START_IN_RECENTS, false);
         once = sp.getBoolean(KEY_ONCE, false);

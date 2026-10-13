@@ -168,6 +168,10 @@ public class MainActivity extends Activity {
         section(root, "Когда запускать");
         switchItem(root, Prefs.KEY_START_ON_UNLOCK, cfg.startOnUnlock, "При разблокировке",
                 "Видео запускается каждый раз, когда вы разблокируете телефон.");
+        switchItem(root, Prefs.KEY_UNLOCK_ON_LOCKSCREEN, cfg.unlockOnLockscreen,
+                "Сразу после распознавания лица",
+                "Видео запускается прямо на экране блокировки, как только лицо распознано. "
+                        + "Если выключено — только когда экран блокировки уберётся (после свайпа).");
         screenOnItem = switchItem(root, Prefs.KEY_START_ON_SCREEN_ON, cfg.startOnScreenOn,
                 "При включении экрана",
                 "Видео играет прямо на экране блокировки, ещё до разблокировки.");
