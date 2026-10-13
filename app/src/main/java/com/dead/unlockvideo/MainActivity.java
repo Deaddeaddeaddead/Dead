@@ -11,6 +11,12 @@ import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
 import android.database.Cursor;
 import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.LinearGradient;
+import android.graphics.Shader;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.graphics.Typeface;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
@@ -43,6 +49,7 @@ import java.util.Map;
 public class MainActivity extends Activity {
     private static final int REQUEST_PICK_VIDEO = 1;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final String LABEL_TAG = "card_label";
 
     // Подготовка реверса переживает пересоздание экрана; трогается только на главном потоке.
     private static boolean reverseRunning;
@@ -58,7 +65,9 @@ public class MainActivity extends Activity {
     private TextView videoName;
     private Button pickButton;
     private Button setButton;
-    private TextView wallpaperStatus;
+    private TextView heroTitle;
+    private TextView heroSubtitle;
+    private boolean wallpaperActive;
     private View countRow;
     private TextView countValue;
     private int playCount;
@@ -73,49 +82,54 @@ public class MainActivity extends Activity {
         Prefs cfg = Prefs.load(this);
         playCount = cfg.playCount;
 
-        // Как в One UI: крупный заголовок на треть экрана, при прокрутке он
-        // сворачивается в верхнюю панель.
-        FrameLayout screen = new FrameLayout(this);
+        // Компактная верхняя панель и прокручиваемые карточки, как в One UI 8.
+        LinearLayout screen = vertical();
         screen.setFitsSystemWindows(true);
+        TextView appTitle = text(getString(R.string.app_name), 22, R.color.text);
+        appTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        appTitle.setGravity(Gravity.CENTER_VERTICAL);
+        appTitle.setPadding(dp(28), 0, dp(28), 0);
+        screen.addView(appTitle, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(72)));
         ScrollView scroll = new ScrollView(this);
         scroll.setClipToPadding(false);
         LinearLayout root = vertical();
-        root.setPadding(dp(12), 0, dp(12), dp(32));
+        root.setPadding(dp(12), dp(4), dp(12), dp(32));
         scroll.addView(root);
-        screen.addView(scroll);
-
-        LinearLayout topBar = new LinearLayout(this);
-        topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setBackgroundColor(getColor(R.color.bg));
-        topBar.setPadding(dp(24), 0, dp(24), 0);
-        TextView smallTitle = text(getString(R.string.app_name), 20, R.color.text);
-        smallTitle.setTypeface(Typeface.DEFAULT_BOLD);
-        topBar.addView(smallTitle);
-        topBar.setAlpha(0f);
-        screen.addView(topBar, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(56)));
+        screen.addView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(screen);
 
-        int headerHeight = Math.max(dp(200),
-                Math.round(getResources().getDisplayMetrics().heightPixels * 0.34f));
-        LinearLayout header = vertical();
-        header.setGravity(Gravity.CENTER);
-        TextView bigTitle = text(getString(R.string.app_name), 36, R.color.text);
-        header.addView(bigTitle);
-        wallpaperStatus = text("", 14, R.color.text2);
-        wallpaperStatus.setPadding(0, dp(6), 0, 0);
-        header.addView(wallpaperStatus);
-        root.addView(header, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, headerHeight));
-
-        scroll.setOnScrollChangeListener((v, x, y, oldX, oldY) -> {
-            float progress = Math.min(1f, y / (float) Math.max(1, headerHeight - dp(56)));
-            header.setAlpha(Math.max(0f, 1f - progress * 1.4f));
-            topBar.setAlpha(Math.max(0f, (progress - 0.75f) / 0.25f));
+        // Главная карточка: свечение, градиентный заголовок и «стеклянная» кнопка.
+        LinearLayout hero = vertical();
+        hero.setGravity(Gravity.CENTER_HORIZONTAL);
+        hero.setBackground(heroBackground());
+        hero.setClipToOutline(true);
+        hero.setPadding(dp(24), dp(32), dp(24), dp(28));
+        heroTitle = text("", 28, R.color.text);
+        heroTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        heroTitle.setGravity(Gravity.CENTER);
+        heroTitle.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
+            if (r - l != or - ol) applyTitleGradient();
         });
+        hero.addView(heroTitle);
+        heroSubtitle = text("", 15, R.color.text);
+        heroSubtitle.setGravity(Gravity.CENTER);
+        heroSubtitle.setAlpha(0.85f);
+        heroSubtitle.setPadding(0, dp(6), 0, 0);
+        hero.addView(heroSubtitle);
+        setButton = button("Установить как обои", R.drawable.button_glass, R.color.on_glass);
+        setButton.setPadding(dp(40), 0, dp(40), 0);
+        setButton.setOnClickListener(v -> setAsWallpaper());
+        LinearLayout.LayoutParams setParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, dp(54));
+        setParams.topMargin = dp(22);
+        hero.addView(setButton, setParams);
+        root.addView(hero, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         // Видео
-        LinearLayout card = card(root, null);
+        LinearLayout card = card(root, "Видео");
         FrameLayout preview = new FrameLayout(this);
         preview.setBackgroundResource(R.drawable.thumb_bg);
         preview.setClipToOutline(true);
@@ -127,14 +141,21 @@ public class MainActivity extends Activity {
         preview.addView(thumbnailHint, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 Gravity.CENTER));
-        card.addView(preview, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(200)));
+        LinearLayout.LayoutParams previewParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(190));
+        previewParams.leftMargin = dp(20);
+        previewParams.rightMargin = dp(20);
+        previewParams.topMargin = dp(6);
+        card.addView(preview, previewParams);
         videoName = text("", 14, R.color.text2);
-        videoName.setPadding(dp(4), dp(10), dp(4), dp(4));
+        videoName.setPadding(dp(24), dp(12), dp(24), 0);
         card.addView(videoName);
-        pickButton = button("Выбрать видео", false);
+        pickButton = button("Выбрать видео", R.drawable.button_tonal, R.color.on_tonal);
+        LinearLayout.LayoutParams pickParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(50));
+        pickParams.setMargins(dp(20), dp(14), dp(20), dp(16));
         pickButton.setOnClickListener(v -> pickVideo());
-        card.addView(pickButton, buttonParams(8));
+        card.addView(pickButton, pickParams);
 
         // Воспроизведение
         card = card(root, "Воспроизведение");
@@ -159,12 +180,12 @@ public class MainActivity extends Activity {
                 "Видео плавно проигрывается назад на экране блокировки. "
                         + "Нужна разовая подготовка видео; звук в этом режиме не играет");
         reverseBox = vertical();
-        reverseBox.setPadding(dp(24), 0, dp(24), dp(14));
+        reverseBox.setPadding(dp(24), 0, dp(24), dp(16));
         reverseProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         reverseProgress.setMax(100);
         reverseProgress.setProgressTintList(ColorStateList.valueOf(getColor(R.color.accent)));
         reverseBox.addView(reverseProgress);
-        reverseStatus = text("", 13, R.color.text2);
+        reverseStatus = text("", 14, R.color.accent);
         reverseBox.addView(reverseStatus);
         card.addView(reverseBox);
 
@@ -185,16 +206,14 @@ public class MainActivity extends Activity {
                 "Обои слегка приближаются, когда открыто приложение, "
                         + "и плавно отдаляются, когда вы возвращаетесь на рабочий стол");
 
-        // Действия
-        setButton = button("Установить как обои", true);
-        setButton.setOnClickListener(v -> setAsWallpaper());
-        root.addView(setButton, buttonParams(24));
-        Button reset = button("Проиграть заново", false);
+        // Дополнительно
+        card = card(root, "Дополнительно");
+        LinearLayout reset = row("Проиграть заново", "Сбросить «уже проиграно» и запустить видео снова");
         reset.setOnClickListener(v -> {
             Prefs.bumpRevision(this);
             Toast.makeText(this, "Видео проиграется заново", Toast.LENGTH_SHORT).show();
         });
-        root.addView(reset, buttonParams(10));
+        card.addView(reset);
 
         updateEnabled();
         updateVideo();
@@ -206,8 +225,8 @@ public class MainActivity extends Activity {
         super.onResume();
         shown = this;
         WallpaperInfo info = WallpaperManager.getInstance(this).getWallpaperInfo();
-        boolean active = info != null && info.getComponent().equals(wallpaperComponent());
-        wallpaperStatus.setText(active ? "Обои установлены" : "Обои ещё не установлены");
+        wallpaperActive = info != null && info.getComponent().equals(wallpaperComponent());
+        updateHero();
         updateReverseStatus();
     }
 
@@ -281,6 +300,7 @@ public class MainActivity extends Activity {
         setButton.setEnabled(hasVideo);
         setButton.setAlpha(hasVideo ? 1f : 0.5f);
         thumbnail.setImageDrawable(null);
+        updateHero();
         if (!hasVideo) return;
 
         File video = Prefs.videoFile(this);
@@ -492,26 +512,67 @@ public class MainActivity extends Activity {
 
     // ---- Построение интерфейса ----
 
+    /** Карточка с подписью раздела внутри, как в One UI 8. */
     private LinearLayout card(LinearLayout root, String title) {
-        if (title != null) {
-            TextView header = text(title, 14, R.color.text2);
-            header.setTypeface(Typeface.DEFAULT_BOLD);
-            header.setPadding(dp(24), dp(22), dp(24), dp(8));
-            root.addView(header);
-        }
         LinearLayout card = vertical();
         card.setBackgroundResource(R.drawable.card_bg);
         card.setClipToOutline(true);
-        card.setPadding(dp(title == null ? 16 : 0), dp(title == null ? 16 : 4),
-                dp(title == null ? 16 : 0), dp(title == null ? 16 : 4));
-        root.addView(card, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        card.setPadding(0, 0, 0, dp(6));
+        TextView label = text(title, 14, R.color.text2);
+        label.setTypeface(Typeface.DEFAULT_BOLD);
+        label.setPadding(dp(24), dp(20), dp(24), dp(4));
+        label.setTag(LABEL_TAG);
+        card.addView(label);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        params.topMargin = dp(16);
+        root.addView(card, params);
         return card;
+    }
+
+    /** Фон главной карточки: карточка + мягкое цветное свечение снизу. */
+    private Drawable heroBackground() {
+        GradientDrawable base = new GradientDrawable();
+        base.setColor(getColor(R.color.card));
+        base.setCornerRadius(dp(26));
+        GradientDrawable glow = new GradientDrawable();
+        glow.setGradientType(GradientDrawable.RADIAL_GRADIENT);
+        glow.setColors(new int[] {getColor(R.color.glow), Color.TRANSPARENT});
+        glow.setGradientCenter(0.5f, 1.05f);
+        glow.setGradientRadius(dp(300));
+        glow.setCornerRadius(dp(26));
+        return new LayerDrawable(new Drawable[] {base, glow});
+    }
+
+    private void applyTitleGradient() {
+        int width = heroTitle.getWidth();
+        if (width <= 0) return;
+        heroTitle.getPaint().setShader(new LinearGradient(0, 0, width, 0,
+                getColor(R.color.gradient_start), getColor(R.color.gradient_end),
+                Shader.TileMode.CLAMP));
+        heroTitle.invalidate();
+    }
+
+    private void updateHero() {
+        boolean hasVideo = Prefs.videoFile(this).isFile();
+        if (!hasVideo) {
+            heroTitle.setText("Выберите видео");
+            heroSubtitle.setText("Оно станет живыми обоями и запустится после разблокировки");
+        } else if (wallpaperActive) {
+            heroTitle.setText("Обои установлены");
+            heroSubtitle.setText("Настройки ниже применяются сразу");
+        } else {
+            heroTitle.setText("Видео готово");
+            heroSubtitle.setText("Осталось установить его как обои");
+        }
+        setButton.setText(wallpaperActive ? "Установить заново" : "Установить как обои");
+        applyTitleGradient();
     }
 
     /** Тонкий разделитель между пунктами, с отступами как в One UI. */
     private void addDividerIfNeeded(LinearLayout card) {
-        if (card.getChildCount() == 0) return;
+        int count = card.getChildCount();
+        if (count == 0 || LABEL_TAG.equals(card.getChildAt(count - 1).getTag())) return;
         View divider = new View(this);
         divider.setBackgroundColor(getColor(R.color.divider));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
@@ -580,15 +641,15 @@ public class MainActivity extends Activity {
         return row;
     }
 
-    private Button button(String label, boolean filled) {
+    private Button button(String label, int backgroundRes, int textColorRes) {
         Button button = new Button(this);
         button.setText(label);
         button.setAllCaps(false);
         button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setStateListAnimator(null);
-        button.setBackgroundResource(filled ? R.drawable.button_filled : R.drawable.button_tonal);
-        button.setTextColor(getColor(filled ? R.color.on_accent : R.color.on_tonal));
+        button.setBackgroundResource(backgroundRes);
+        button.setTextColor(getColor(textColorRes));
         return button;
     }
 
@@ -606,15 +667,6 @@ public class MainActivity extends Activity {
         button.setMinimumHeight(0);
         button.setLayoutParams(new LinearLayout.LayoutParams(dp(40), dp(40)));
         return button;
-    }
-
-    private LinearLayout.LayoutParams buttonParams(int topMarginDp) {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(52));
-        params.leftMargin = dp(12);
-        params.rightMargin = dp(12);
-        params.topMargin = dp(topMarginDp);
-        return params;
     }
 
     private LinearLayout vertical() {

@@ -1,17 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_background">#1E2A44</color>
-    <!-- Палитра в духе One UI 7 -->
-    <color name="bg">#F2F2F2</color>
-    <color name="card">#FCFCFC</color>
-    <color name="thumb">#E6E6E6</color>
-    <color name="divider">#E3E3E3</color>
+    <!-- Палитра в духе One UI 8 -->
+    <color name="bg">#F6F6F6</color>
+    <color name="card">#FFFFFF</color>
+    <color name="thumb">#ECECEC</color>
+    <color name="divider">#E2E2E2</color>
     <color name="text">#010101</color>
-    <color name="text2">#7A7A7A</color>
-    <color name="accent">#3E7BF6</color>
+    <color name="text2">#7C7C80</color>
+    <color name="accent">#3A7DF5</color>
     <color name="on_accent">#FFFFFF</color>
-    <color name="tonal">#E9E9E9</color>
-    <color name="on_tonal">#1A1A1A</color>
+    <color name="tonal">#EDEDED</color>
+    <color name="on_tonal">#111111</color>
+    <color name="glass">#B3D2D2D2</color>
+    <color name="on_glass">#111111</color>
+    <color name="glow">#553A9BF5</color>
+    <color name="gradient_start">#25B5D6</color>
+    <color name="gradient_end">#3A7DF5</color>
     <color name="switch_off_track">#D3D3D3</color>
     <color name="switch_off_thumb">#FFFFFF</color>
     <color name="switch_off_stroke">#9A9A9A</color>
