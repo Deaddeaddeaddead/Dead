@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Рисует кадры видео на поверхность обоев через OpenGL на своём потоке: обрезает видео
- * под экран и умеет приближать его. Источников два — оригинал и обратное видео, на экран
+ * под экран. Источников два — оригинал и обратное видео, на экран
  * выводится один; переключение происходит, когда у нового источника появляется кадр,
  * чтобы не мигнуть устаревшей картинкой.
  */
@@ -31,7 +31,6 @@ final class WallpaperRenderer {
     private GlUtil.FrameDrawer drawer;
     private int viewWidth;
     private int viewHeight;
-    private float zoom = 1f;
     private int active = SOURCE_FORWARD;
     private int pending = -1;
 
@@ -170,15 +169,6 @@ final class WallpaperRenderer {
         });
     }
 
-    /** 1 — без приближения. */
-    void setZoom(float value) {
-        handler.post(() -> {
-            if (zoom == value) return;
-            zoom = value;
-            draw();
-        });
-    }
-
     void release() {
         CountDownLatch done = new CountDownLatch(1);
         boolean posted = handler.post(() -> {
@@ -220,7 +210,7 @@ final class WallpaperRenderer {
             }
         }
         drawer.draw(input.textureId, input.matrix, viewWidth, viewHeight,
-                scaleX / zoom, scaleY / zoom);
+                scaleX, scaleY);
         egl.swap(-1);
     }
 }

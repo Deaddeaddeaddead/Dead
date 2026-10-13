@@ -22,7 +22,6 @@ final class Prefs {
     static final String KEY_LOCK_ACTION = "lock_action";
     // Дополнительно
     static final String KEY_SOUND = "sound";
-    static final String KEY_ZOOM_EFFECT = "zoom_effect";
 
     static final String KEY_VIDEO_NAME = "video_name";
     /** Меняется при каждом новом видео — чтобы не принять реверс от старого. */
@@ -31,7 +30,7 @@ final class Prefs {
     static final String KEY_REVERSE_LAST_MS = "reverse_last_ms";
     /** Версия способа подготовки реверса; при смене старый ролик готовится заново. */
     static final String KEY_REVERSE_FORMAT = "reverse_format";
-    static final int REVERSE_FORMAT = 3;
+    static final int REVERSE_FORMAT = 4;
     /** Видео уже отыграло в режиме «Только один раз» — больше не запускать. */
     static final String KEY_FINISHED = "finished";
     /** Меняется при изменении настроек; обои перечитывают их, не сбрасывая состояние. */
@@ -55,7 +54,6 @@ final class Prefs {
     final boolean endOnLastFrame;
     final int lockAction;
     final boolean sound;
-    final boolean zoomEffect;
     final boolean reverseReady;
     final int reverseLastMs;
     final boolean finished;
@@ -71,7 +69,6 @@ final class Prefs {
         int lock = sp.getInt(KEY_LOCK_ACTION, LOCK_REWIND);
         lockAction = lock >= LOCK_KEEP && lock <= LOCK_REVERSE ? lock : LOCK_REWIND;
         sound = sp.getBoolean(KEY_SOUND, false);
-        zoomEffect = sp.getBoolean(KEY_ZOOM_EFFECT, false);
         reverseReady = sp.getBoolean(KEY_REVERSE_READY, false)
                 && sp.getInt(KEY_REVERSE_FORMAT, 1) == REVERSE_FORMAT;
         reverseLastMs = sp.getInt(KEY_REVERSE_LAST_MS, 0);

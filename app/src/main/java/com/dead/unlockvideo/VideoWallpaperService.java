@@ -1,6 +1,5 @@
 package com.dead.unlockvideo;
 
-import android.animation.ValueAnimator;
 import android.app.KeyguardManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -16,7 +15,6 @@ import android.os.PowerManager;
 import android.service.wallpaper.WallpaperService;
 import android.util.Log;
 import android.view.SurfaceHolder;
-import android.view.animation.DecelerateInterpolator;
 
 import java.io.File;
 
@@ -27,9 +25,6 @@ import java.io.File;
  */
 public class VideoWallpaperService extends WallpaperService {
     private static final String TAG = "VideoWallpaper";
-    /** Насколько приближаются обои при открытом приложении. */
-    private static final float ZOOM_AMOUNT = 0.08f;
-    private static final long RETURN_ZOOM_MS = 550;
     /** Ближе к концу, чем на столько, — считаем, что видео стоит в конце. */
     private static final int END_EPSILON_MS = 80;
     /** positionMs == AT_END — стоим на последнем кадре (длительность ещё неизвестна). */
@@ -53,6 +48,17 @@ public class VideoWallpaperService extends WallpaperService {
         private static final int PHASE_DONE = 2;
 
         private final Handler handler = new Handler(Looper.getMainLooper());
+
+        private void log(String event) {
+            if (!isPreview()) EventLog.add(VideoWallpaperService.this, event);
+        }
+
+        private String state() {
+            return "фаза=" + new String[] {"ждёт", "играет", "доиграло"}[phase]
+                    + " позиция=" + forwardPosition() + "мс"
+                    + (needReverse ? " нужен_реверс" : "")
+                    + (reversing ? " идёт_реверс" : "");
+        }
         private SharedPreferences sp;
         private Prefs cfg;
         private PowerManager power;
@@ -90,11 +96,6 @@ public class VideoWallpaperService extends WallpaperService {
          * пришло событие разблокировки. Сбрасывается при выключении экрана.
          */
         private boolean unlocked;
-
-        private float systemZoom;
-        private float returnZoom;
-        private boolean systemZoomSeen;
-        private ValueAnimator returnZoomAnimator;
 
         /** Пока виден экран блокировки, следим за разблокировкой (лицо, задержки системы). */
         private final Runnable unlockWatch = new Runnable() {
@@ -146,6 +147,7 @@ public class VideoWallpaperService extends WallpaperService {
             unlocked = unlockedNow();
             loadConfig();
             phase = finishedForever ? PHASE_DONE : PHASE_WAITING;
+            log("обои запущены, реверс " + (reverseAvailable ? "готов" : "недоступен"));
             positionMs = finishedForever && cfg.endOnLastFrame && cfg.lockAction == Prefs.LOCK_KEEP
                     ? AT_END : 0;
             // Превью сразу показывает, как играет видео; настоящие обои ждут события.
@@ -155,7 +157,6 @@ public class VideoWallpaperService extends WallpaperService {
         @Override
         public void onDestroy() {
             handler.removeCallbacksAndMessages(null);
-            cancelReturnZoom();
             sp.unregisterOnSharedPreferenceChangeListener(this);
             VideoWallpaperService.this.unregisterReceiver(screenReceiver);
             closePlayers();
@@ -168,7 +169,6 @@ public class VideoWallpaperService extends WallpaperService {
             super.onSurfaceChanged(holder, format, width, height);
             if (renderer == null) {
                 renderer = WallpaperRenderer.create(holder.getSurface(), width, height);
-                applyZoom();
                 openPlayers();
             } else {
                 renderer.setViewSize(width, height);
@@ -187,22 +187,16 @@ public class VideoWallpaperService extends WallpaperService {
         @Override
         public void onVisibilityChanged(boolean isVisible) {
             visible = isVisible;
+            log((isVisible ? "обои видны" : "обои скрыты") + " (заблокировано="
+                    + !unlockedNow() + ") " + state());
             if (!isVisible) {
                 handler.removeCallbacks(unlockWatch);
                 hiddenByApp = power.isInteractive() && unlocked;
                 pauseAll();
-                // Обои закрыло приложение — приближаем, чтобы при возврате плавно отдалить.
-                // Если лаунчер сам присылает onZoomChanged, он делает это лучше нас.
-                if (cfg.zoomEffect && !systemZoomSeen && hiddenByApp) {
-                    cancelReturnZoom();
-                    returnZoom = 1f;
-                    applyZoom();
-                }
                 return;
             }
             boolean backFromApp = hiddenByApp;
             hiddenByApp = false;
-            if (returnZoom > 0f) animateReturnZoom();
             watchUnlock();
             if (backFromApp && cfg.startOnHome && !isPreview()) {
                 triggerForward(true);
@@ -214,6 +208,7 @@ public class VideoWallpaperService extends WallpaperService {
         }
 
         private void onScreenOff() {
+            log("экран выключен, " + state());
             unlocked = isPreview();
             handler.removeCallbacks(unlockWatch);
             hiddenByApp = false;
@@ -233,6 +228,7 @@ public class VideoWallpaperService extends WallpaperService {
         }
 
         private void onScreenOn() {
+            log("экран включён (заблокировано=" + !unlockedNow() + ") " + state());
             // Например, разблокировали лицом ещё до того, как экран включился полностью.
             if (!unlocked && unlockedNow()) {
                 onUnlocked();
@@ -251,6 +247,7 @@ public class VideoWallpaperService extends WallpaperService {
          * реверс, если идёт, останавливается, дальше видео идёт вперёд.
          */
         private void onUnlocked() {
+            log("разблокировано" + (unlocked ? " (повторно)" : "") + ", " + state());
             if (unlocked) {
                 resume();
                 return;
@@ -270,26 +267,18 @@ public class VideoWallpaperService extends WallpaperService {
             }
         }
 
-        /** Android 11+: лаунчер сообщает, насколько «отодвинуть» обои (0..1). */
-        @Override
-        public void onZoomChanged(float zoom) {
-            systemZoom = zoom;
-            if (zoom > 0f) systemZoomSeen = true;
-            applyZoom();
-        }
-
         @Override
         public void onSharedPreferenceChanged(SharedPreferences prefs, String key) {
             if (Prefs.KEY_REVISION.equals(key)) {
                 // Новые настройки, текущее состояние сохраняем.
                 closePlayers();
                 loadConfig();
+                log("настройки обновлены, реверс " + (reverseAvailable ? "готов" : "недоступен"));
                 if (finishedForever) phase = PHASE_DONE;
                 if (needReverse && !reverseAvailable) {
                     needReverse = false;
                     positionMs = 0;
                 }
-                applyZoom();
                 openPlayers();
             } else if (Prefs.KEY_PLAY_NOW.equals(key)) {
                 // «Проиграть сейчас» или новое видео: с начала, как только обои станут видны.
@@ -299,7 +288,6 @@ public class VideoWallpaperService extends WallpaperService {
                 positionMs = 0;
                 needReverse = false;
                 armed = true;
-                applyZoom();
                 openPlayers();
             }
         }
@@ -311,10 +299,6 @@ public class VideoWallpaperService extends WallpaperService {
                     && Prefs.reverseFile(context).isFile();
             lastFrameMs = cfg.reverseLastMs;
             finishedForever = !isPreview() && cfg.once && cfg.finished;
-            if (!cfg.zoomEffect) {
-                cancelReturnZoom();
-                returnZoom = 0f;
-            }
         }
 
         // ---- Логика воспроизведения ----
@@ -371,6 +355,7 @@ public class VideoWallpaperService extends WallpaperService {
                 playsLeft = cfg.plays;
             }
             if (!forward.isPlaying()) {
+                log("▶ вперёд с " + forward.getCurrentPosition() + "мс");
                 renderer.showSource(WallpaperRenderer.SOURCE_FORWARD);
                 forward.start();
             }
@@ -382,6 +367,8 @@ public class VideoWallpaperService extends WallpaperService {
             needReverse = false;
             if (position <= 0) return;
             reversing = true;
+            log("◀ реверс с " + position + "мс (в обратном видео "
+                    + (lastFrameMs - Math.min(position, lastFrameMs)) + "мс)");
             seek(backward, lastFrameMs - Math.min(position, lastFrameMs));
             backward.start();
             renderer.showSource(WallpaperRenderer.SOURCE_REVERSE);
@@ -392,6 +379,7 @@ public class VideoWallpaperService extends WallpaperService {
             if (!reversing) return;
             reversing = false;
             int position = clamp(lastFrameMs - backward.getCurrentPosition());
+            log("■ реверс остановлен на " + position + "мс");
             backward.pause();
             seekForward(position);
             renderer.showSource(WallpaperRenderer.SOURCE_FORWARD);
@@ -399,6 +387,7 @@ public class VideoWallpaperService extends WallpaperService {
 
         private void onBackwardCompleted(MediaPlayer mp) {
             if (mp != backward || !reversing) return;
+            log("■ реверс доиграл до начала");
             reversing = false;
             seekForward(0);
             renderer.showSource(WallpaperRenderer.SOURCE_FORWARD);
@@ -406,6 +395,7 @@ public class VideoWallpaperService extends WallpaperService {
 
         private void onForwardCompleted(MediaPlayer mp) {
             if (mp != forward || cfg.infinite()) return;
+            log("■ видео доиграло до конца");
             playsLeft--;
             if (playsLeft > 0) {
                 mp.start(); // после окончания start() начинает с начала
@@ -515,6 +505,8 @@ public class VideoWallpaperService extends WallpaperService {
                 });
                 mp.setOnErrorListener((p, what, extra) -> {
                     Log.w(TAG, "MediaPlayer error " + what + "/" + extra + " source " + source);
+                    log("ошибка плеера " + (source == WallpaperRenderer.SOURCE_REVERSE
+                            ? "реверса" : "видео") + ": " + what + "/" + extra);
                     if (p == backward) {
                         // Без реверса обойдёмся — возвращаем к началу мгновенно.
                         reversing = false;
@@ -564,33 +556,6 @@ public class VideoWallpaperService extends WallpaperService {
             if (renderer != null) {
                 renderer.release();
                 renderer = null;
-            }
-        }
-
-        // ---- Приближение ----
-
-        private void applyZoom() {
-            if (renderer == null) return;
-            float amount = cfg.zoomEffect ? Math.max(systemZoom, returnZoom) : 0f;
-            renderer.setZoom(1f + ZOOM_AMOUNT * amount);
-        }
-
-        private void animateReturnZoom() {
-            cancelReturnZoom();
-            returnZoomAnimator = ValueAnimator.ofFloat(returnZoom, 0f);
-            returnZoomAnimator.setDuration(RETURN_ZOOM_MS);
-            returnZoomAnimator.setInterpolator(new DecelerateInterpolator(1.6f));
-            returnZoomAnimator.addUpdateListener(a -> {
-                returnZoom = (float) a.getAnimatedValue();
-                applyZoom();
-            });
-            returnZoomAnimator.start();
-        }
-
-        private void cancelReturnZoom() {
-            if (returnZoomAnimator != null) {
-                returnZoomAnimator.cancel();
-                returnZoomAnimator = null;
             }
         }
     }

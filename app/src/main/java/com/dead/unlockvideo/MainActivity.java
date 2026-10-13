@@ -1,9 +1,12 @@
 package com.dead.unlockvideo;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.WallpaperInfo;
 import android.app.WallpaperManager;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -207,17 +210,18 @@ public class MainActivity extends Activity {
         // Дополнительно
         section(root, "Дополнительно");
         switchItem(root, Prefs.KEY_SOUND, cfg.sound, "Звук", null);
-        switchItem(root, Prefs.KEY_ZOOM_EFFECT, cfg.zoomEffect,
-                "Приближение при открытии приложений",
-                "Обои слегка приближаются, когда открыто приложение, "
-                        + "и плавно отдаляются, когда вы возвращаетесь на рабочий стол.");
         LinearLayout playNow = row("Проиграть сейчас", "Запустить видео с начала");
         playNow.setOnClickListener(v -> {
             Prefs.playNow(this);
             Toast.makeText(this, "Видео запустится, когда вы вернётесь на рабочий стол",
                     Toast.LENGTH_SHORT).show();
         });
-        card(root).addView(playNow);
+        LinearLayout extra = card(root);
+        extra.addView(playNow);
+        LinearLayout log = row("Журнал событий",
+                "Что делали обои — пригодится, если что-то работает не так");
+        log.setOnClickListener(v -> showEventLog());
+        extra.addView(log);
 
         updateEnabled();
         updateVideo();
@@ -540,6 +544,30 @@ public class MainActivity extends Activity {
         } else {
             reverseBox.setVisibility(View.GONE);
         }
+    }
+
+    // ---- Журнал ----
+
+    private void showEventLog() {
+        String text = EventLog.text(this);
+        TextView content = text(text.isEmpty() ? "Пока пусто." : text, 12, R.color.text);
+        content.setTypeface(Typeface.MONOSPACE);
+        content.setTextIsSelectable(true);
+        content.setPadding(dp(24), dp(12), dp(24), dp(12));
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(content);
+        scroll.post(() -> scroll.fullScroll(View.FOCUS_DOWN));
+        new AlertDialog.Builder(this)
+                .setTitle("Журнал событий")
+                .setView(scroll)
+                .setPositiveButton("Копировать", (d, w) -> {
+                    ClipboardManager clipboard = getSystemService(ClipboardManager.class);
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Журнал видеообоев", text));
+                    Toast.makeText(this, "Скопировано", Toast.LENGTH_SHORT).show();
+                })
+                .setNeutralButton("Очистить", (d, w) -> EventLog.clear(this))
+                .setNegativeButton("Закрыть", null)
+                .show();
     }
 
     // ---- Установка обоев ----

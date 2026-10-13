@@ -13,7 +13,9 @@ import android.os.SystemClock;
 import android.view.Surface;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
@@ -268,9 +270,14 @@ final class VideoReverser {
         }
     }
 
-    /** Переписывает кадры (все ключевые) в обратном порядке. */
+    /**
+     * Переписывает кадры (все ключевые) в обратном порядке. Кадры читаются строго
+     * последовательно во временный файл, без перемоток — так результат не зависит
+     * от того, как конкретный телефон ищет кадры в видео.
+     */
     private static Result writeBackward(File intra, File output, int rotation)
             throws IOException {
+        File raw = new File(output.getPath() + ".frames");
         MediaExtractor extractor = new MediaExtractor();
         MediaMuxer muxer = null;
         boolean muxerStarted = false;
@@ -281,36 +288,53 @@ final class VideoReverser {
             int width = format.getInteger(MediaFormat.KEY_WIDTH);
             int height = format.getInteger(MediaFormat.KEY_HEIGHT);
             ByteBuffer buffer = ByteBuffer.allocateDirect(Math.max(1 << 20, width * height * 2));
+            byte[] bytes = new byte[buffer.capacity()];
 
-            // Сначала собираем времена кадров и проверяем, что все кадры ключевые.
-            List<Long> times = new ArrayList<>();
-            while (extractor.getSampleTime() >= 0) {
-                if ((extractor.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) == 0) {
-                    throw new IOException("кодировщик телефона не умеет делать все кадры ключевыми");
+            // 1. Все кадры по порядку — во временный файл; запоминаем, где какой лежит.
+            List<long[]> frames = new ArrayList<>(); // {время, смещение, размер}
+            long offset = 0;
+            try (FileOutputStream out = new FileOutputStream(raw)) {
+                int size;
+                while ((size = extractor.readSampleData(buffer, 0)) >= 0) {
+                    if ((extractor.getSampleFlags() & MediaExtractor.SAMPLE_FLAG_SYNC) == 0) {
+                        throw new IOException(
+                                "кодировщик телефона не умеет делать все кадры ключевыми");
+                    }
+                    buffer.position(0);
+                    buffer.get(bytes, 0, size);
+                    out.write(bytes, 0, size);
+                    frames.add(new long[] {extractor.getSampleTime(), offset, size});
+                    offset += size;
+                    buffer.clear();
+                    extractor.advance();
                 }
-                times.add(extractor.getSampleTime());
-                extractor.advance();
             }
-            int count = times.size();
+            int count = frames.size();
             if (count == 0) throw new IOException("пустое видео");
-            long firstUs = times.get(0);
-            long lastUs = times.get(count - 1) - firstUs;
+            long firstUs = frames.get(0)[0];
+            long lastUs = frames.get(count - 1)[0] - firstUs;
 
+            // 2. Пишем их в обратном порядке: последний кадр становится первым.
             muxer = new MediaMuxer(output.getAbsolutePath(),
                     MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
             muxer.setOrientationHint(rotation);
             int track = muxer.addTrack(format);
             muxer.start();
             muxerStarted = true;
-
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-            for (int k = count - 1; k >= 0; k--) {
-                long time = times.get(k);
-                extractor.seekTo(time, MediaExtractor.SEEK_TO_CLOSEST_SYNC);
-                int size = extractor.readSampleData(buffer, 0);
-                if (size < 0) throw new IOException("не удалось прочитать кадр");
-                info.set(0, size, lastUs - (time - firstUs), MediaCodec.BUFFER_FLAG_KEY_FRAME);
-                muxer.writeSampleData(track, buffer, info);
+            try (RandomAccessFile in = new RandomAccessFile(raw, "r")) {
+                for (int k = count - 1; k >= 0; k--) {
+                    long[] frame = frames.get(k);
+                    int size = (int) frame[2];
+                    in.seek(frame[1]);
+                    in.readFully(bytes, 0, size);
+                    buffer.clear();
+                    buffer.put(bytes, 0, size);
+                    buffer.flip();
+                    info.set(0, size, lastUs - (frame[0] - firstUs),
+                            MediaCodec.BUFFER_FLAG_KEY_FRAME);
+                    muxer.writeSampleData(track, buffer, info);
+                }
             }
             muxer.stop();
             muxerStarted = false;
@@ -324,6 +348,8 @@ final class VideoReverser {
                 }
                 muxer.release();
             }
+            //noinspection ResultOfMethodCallIgnored
+            raw.delete();
         }
     }
 
