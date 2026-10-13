@@ -133,9 +133,14 @@ final class GlUtil {
             matrixHandle = GLES20.glGetUniformLocation(program, "uTexMatrix");
             cropHandle = GLES20.glGetUniformLocation(program, "uCrop");
 
+            textureId = createExternalTexture();
+        }
+
+        /** Создаёт ещё одну внешнюю текстуру — для второго источника видео. */
+        static int createExternalTexture() {
             int[] textures = new int[1];
             GLES20.glGenTextures(1, textures, 0);
-            textureId = textures[0];
+            int textureId = textures[0];
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId);
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
                     GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
@@ -145,6 +150,7 @@ final class GlUtil {
                     GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
                     GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+            return textureId;
         }
 
         void clear(int width, int height) {
@@ -154,10 +160,15 @@ final class GlUtil {
         }
 
         void draw(float[] texMatrix, int width, int height, float scaleX, float scaleY) {
+            draw(textureId, texMatrix, width, height, scaleX, scaleY);
+        }
+
+        void draw(int texture, float[] texMatrix, int width, int height, float scaleX,
+                  float scaleY) {
             clear(width, height);
             GLES20.glUseProgram(program);
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textureId);
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texture);
             GLES20.glUniformMatrix4fv(matrixHandle, 1, false, texMatrix, 0);
             GLES20.glUniform4f(cropHandle, scaleX, scaleY,
                     0.5f - scaleX / 2f, 0.5f - scaleY / 2f);

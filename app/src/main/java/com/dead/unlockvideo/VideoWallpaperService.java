@@ -10,8 +10,6 @@ import android.content.SharedPreferences;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.os.Build;
-import android.os.Handler;
-import android.os.Looper;
 import android.os.PowerManager;
 import android.service.wallpaper.WallpaperService;
 import android.util.Log;
@@ -20,13 +18,20 @@ import android.view.animation.DecelerateInterpolator;
 
 import java.io.File;
 
+/**
+ * Видеообои. Вперёд всегда играет оригинальный файл (полное качество). Для плавного
+ * возврата к началу есть второй плеер с обратным видео: он включается только на время
+ * перемотки назад, рендер переключается между ними без мигания.
+ */
 public class VideoWallpaperService extends WallpaperService {
     private static final String TAG = "VideoWallpaper";
     /** Насколько приближаются обои при открытом приложении. */
     private static final float ZOOM_AMOUNT = 0.08f;
     private static final long RETURN_ZOOM_MS = 550;
-    /** Как часто проверяем, не дошло ли видео до конца прямой половины. */
-    private static final long FORWARD_WATCH_MS = 10;
+    /** Ближе к концу, чем на столько, — считаем, что видео стоит в конце. */
+    private static final int END_EPSILON_MS = 80;
+    /** positionMs == AT_END — стоим на последнем кадре (длительность ещё неизвестна). */
+    private static final int AT_END = Integer.MAX_VALUE;
 
     @Override
     public Engine onCreateEngine() {
@@ -36,52 +41,50 @@ public class VideoWallpaperService extends WallpaperService {
     private final class VideoEngine extends Engine
             implements SharedPreferences.OnSharedPreferenceChangeListener {
 
-        /** Серия ждёт запуска по событию; на экране первый кадр. */
+        /** Серия ждёт запуска по событию. */
         private static final int PHASE_WAITING = 0;
         /** Серия идёт (может стоять на паузе, пока обои не видны). */
         private static final int PHASE_PLAYING = 1;
         /** Серия закончилась; на экране последний или первый кадр. */
         private static final int PHASE_DONE = 2;
 
-        private final Handler handler = new Handler(Looper.getMainLooper());
         private SharedPreferences sp;
         private Prefs cfg;
         private PowerManager power;
+        private KeyguardManager keyguard;
         private WallpaperRenderer renderer;
-        private MediaPlayer player;
-        private boolean prepared;
+
+        /** Оригинал — для воспроизведения вперёд. */
+        private MediaPlayer forward;
+        private boolean forwardReady;
+        /** Обратное видео — только для перемотки назад. */
+        private MediaPlayer backward;
+        private boolean backwardReady;
+        /** Есть готовое обратное видео и реверс выбран в настройках. */
+        private boolean reverseAvailable;
+        /** Последний кадр оригинала; позиция r в обратном видео = lastFrameMs - r вперёд. */
+        private int lastFrameMs;
+
         private boolean visible;
-        /** Была ли разблокировка после последнего выключения экрана. */
-        private boolean unlockedSinceScreenOff;
         private int phase;
         private int playsLeft;
-        /** Позиция в прямом видео, с которой продолжать. */
-        private int resumePositionMs;
-        /** Что показывать в PHASE_DONE: первый кадр или последний. */
-        private boolean restAtStart;
-
-        /**
-         * Плавный возврат: в файле после прямого видео лежит оно же задом наперёд,
-         * [0, lastFrameMs] — вперёд, [splitMs, конец] — назад.
-         */
-        private boolean reversible;
-        private int lastFrameMs;
-        private int splitMs;
-        /** Нужно вернуться к началу реверсом, как только обои станут видны. */
-        private boolean pendingRewind;
-        /** Сейчас играет обратная половина. */
+        /** Позиция в оригинале, пока плеер не готов (или AT_END). */
+        private int positionMs;
+        /** Был запуск по событию; серия стартует, как только станет можно. */
+        private boolean armed;
+        /** Режим «Только один раз», и видео уже отыграло. */
+        private boolean finishedForever;
+        /** После блокировки нужно отмотать назад, когда появится экран блокировки. */
+        private boolean needReverse;
+        /** Сейчас играет обратное видео. */
         private boolean reversing;
+        /** Обои закрыло приложение (а не выключение экрана). */
+        private boolean hiddenByApp;
 
         private float systemZoom;
         private float returnZoom;
         private boolean systemZoomSeen;
         private ValueAnimator returnZoomAnimator;
-        /** Обои закрыло приложение (а не выключение экрана). */
-        private boolean hiddenByApp;
-        /** Был запуск по событию; серия стартует, как только станет можно. */
-        private boolean armed;
-        /** Режим «Только один раз», и видео уже отыграло. */
-        private boolean finishedForever;
 
         private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
             @Override
@@ -97,25 +100,13 @@ public class VideoWallpaperService extends WallpaperService {
             }
         };
 
-        private final Runnable forwardWatch = new Runnable() {
-            @Override
-            public void run() {
-                if (player == null || !prepared || reversing || !player.isPlaying()) return;
-                if (player.getCurrentPosition() >= lastFrameMs - 15) {
-                    player.pause();
-                    onForwardEnd();
-                } else {
-                    handler.postDelayed(this, FORWARD_WATCH_MS);
-                }
-            }
-        };
-
         @Override
         public void onCreate(SurfaceHolder holder) {
             super.onCreate(holder);
             setTouchEventsEnabled(false);
             Context context = VideoWallpaperService.this;
             power = context.getSystemService(PowerManager.class);
+            keyguard = context.getSystemService(KeyguardManager.class);
             sp = Prefs.prefs(context);
             sp.registerOnSharedPreferenceChangeListener(this);
 
@@ -129,22 +120,20 @@ public class VideoWallpaperService extends WallpaperService {
                 context.registerReceiver(screenReceiver, filter);
             }
 
-            KeyguardManager keyguard = context.getSystemService(KeyguardManager.class);
-            unlockedSinceScreenOff = isPreview() || !keyguard.isKeyguardLocked();
             loadConfig();
             phase = finishedForever ? PHASE_DONE : PHASE_WAITING;
-            restAtStart = !cfg.endOnLastFrame || cfg.lockAction != Prefs.LOCK_KEEP;
+            positionMs = finishedForever && cfg.endOnLastFrame && cfg.lockAction == Prefs.LOCK_KEEP
+                    ? AT_END : 0;
             // Превью сразу показывает, как играет видео; настоящие обои ждут события.
             armed = isPreview();
         }
 
         @Override
         public void onDestroy() {
-            handler.removeCallbacksAndMessages(null);
             cancelReturnZoom();
             sp.unregisterOnSharedPreferenceChangeListener(this);
             VideoWallpaperService.this.unregisterReceiver(screenReceiver);
-            closePlayer();
+            closePlayers();
             releaseRenderer();
             super.onDestroy();
         }
@@ -155,7 +144,7 @@ public class VideoWallpaperService extends WallpaperService {
             if (renderer == null) {
                 renderer = WallpaperRenderer.create(holder.getSurface(), width, height);
                 applyZoom();
-                openPlayer();
+                openPlayers();
             } else {
                 renderer.setViewSize(width, height);
             }
@@ -163,20 +152,21 @@ public class VideoWallpaperService extends WallpaperService {
 
         @Override
         public void onSurfaceDestroyed(SurfaceHolder holder) {
-            closePlayer();
+            closePlayers();
             releaseRenderer();
             super.onSurfaceDestroyed(holder);
         }
+
+        // ---- События ----
 
         @Override
         public void onVisibilityChanged(boolean isVisible) {
             visible = isVisible;
             if (!isVisible) {
-                hiddenByApp = power.isInteractive();
-                pausePlayback();
-                // Обои закрыло приложение (а не выключение экрана) — приближаем,
-                // чтобы при возврате плавно отдалить. Если лаунчер сам присылает
-                // onZoomChanged, он делает это лучше нас.
+                hiddenByApp = power.isInteractive() && !locked();
+                pauseAll();
+                // Обои закрыло приложение — приближаем, чтобы при возврате плавно отдалить.
+                // Если лаунчер сам присылает onZoomChanged, он делает это лучше нас.
                 if (cfg.zoomEffect && !systemZoomSeen && hiddenByApp) {
                     cancelReturnZoom();
                     returnZoom = 1f;
@@ -188,10 +178,51 @@ public class VideoWallpaperService extends WallpaperService {
             hiddenByApp = false;
             if (returnZoom > 0f) animateReturnZoom();
             if (backFromApp && cfg.startOnHome && !isPreview()) {
-                // Вернулись из приложения на рабочий стол — проигрываем с начала.
-                triggerStart(true);
+                triggerForward(true);
+            } else if (locked() && needReverse) {
+                startReverse();
             } else {
-                tryPlay();
+                resume();
+            }
+        }
+
+        private void onScreenOff() {
+            hiddenByApp = false;
+            armed = isPreview();
+            pauseAll();
+            boolean atStart = forwardPosition() <= 30;
+            if (cfg.lockAction == Prefs.LOCK_KEEP || atStart) return;
+            if (cfg.lockAction == Prefs.LOCK_REVERSE && reverseAvailable) {
+                // Назад проиграем на экране блокировки, когда он появится.
+                needReverse = true;
+            } else {
+                // Мгновенно, пока экран выключен — к включению на экране первый кадр.
+                seekForward(0);
+            }
+            // Прерванная серия сбрасывается — дальше ждём нового запуска.
+            if (phase == PHASE_PLAYING) phase = PHASE_WAITING;
+        }
+
+        private void onScreenOn() {
+            if (cfg.startOnScreenOn) {
+                triggerForward(false);
+            } else if (visible && locked() && needReverse) {
+                startReverse();
+            }
+        }
+
+        /** Разблокировали: реверс (если идёт) останавливается, дальше — вперёд. */
+        private void onUserPresent() {
+            if (reversing) stopReverse();
+            if (cfg.startOnUnlock) {
+                triggerForward(false);
+            } else {
+                if (needReverse) {
+                    // Назад не успели — просто к началу.
+                    needReverse = false;
+                    seekForward(0);
+                }
+                resume();
             }
         }
 
@@ -207,37 +238,34 @@ public class VideoWallpaperService extends WallpaperService {
         public void onSharedPreferenceChanged(SharedPreferences prefs, String key) {
             if (Prefs.KEY_REVISION.equals(key)) {
                 // Новые настройки, текущее состояние сохраняем.
-                closePlayer();
+                closePlayers();
                 loadConfig();
                 if (finishedForever) phase = PHASE_DONE;
-                if (pendingRewind && !reversible) {
-                    pendingRewind = false;
-                    resumePositionMs = 0;
-                    if (phase == PHASE_DONE) restAtStart = true;
+                if (needReverse && !reverseAvailable) {
+                    needReverse = false;
+                    positionMs = 0;
                 }
                 applyZoom();
-                openPlayer();
+                openPlayers();
             } else if (Prefs.KEY_PLAY_NOW.equals(key)) {
                 // «Проиграть сейчас» или новое видео: с начала, как только обои станут видны.
-                closePlayer();
+                closePlayers();
                 loadConfig();
                 phase = PHASE_WAITING;
-                resumePositionMs = 0;
-                pendingRewind = false;
-                reversing = false;
+                positionMs = 0;
+                needReverse = false;
                 armed = true;
                 applyZoom();
-                openPlayer();
+                openPlayers();
             }
         }
 
         private void loadConfig() {
             Context context = VideoWallpaperService.this;
             cfg = Prefs.load(context);
-            reversible = cfg.wantsReverse() && cfg.reverseReady && cfg.reverseLastMs > 0
-                    && Prefs.reversibleFile(context).isFile();
+            reverseAvailable = cfg.wantsReverse() && cfg.reverseReady && cfg.reverseLastMs > 0
+                    && Prefs.reverseFile(context).isFile();
             lastFrameMs = cfg.reverseLastMs;
-            splitMs = cfg.reverseSplitMs;
             finishedForever = !isPreview() && cfg.once && cfg.finished;
             if (!cfg.zoomEffect) {
                 cancelReturnZoom();
@@ -245,58 +273,235 @@ public class VideoWallpaperService extends WallpaperService {
             }
         }
 
-        // ---- Плеер ----
+        // ---- Логика воспроизведения ----
 
-        private void openPlayer() {
-            if (renderer == null || player != null) return;
+        private boolean locked() {
+            return !isPreview() && keyguard.isKeyguardLocked();
+        }
+
+        /** Играть вперёд можно, когда обои видны и телефон разблокирован (или так настроено). */
+        private boolean canPlayForward() {
+            return visible && (!locked() || cfg.startOnScreenOn);
+        }
+
+        /**
+         * Запуск по событию. Идущую серию продолжает, а с restart — начинает заново.
+         * После прерванного реверса видео идёт вперёд с того же кадра.
+         */
+        private void triggerForward(boolean restart) {
+            if (finishedForever) return;
+            if (reversing) stopReverse();
+            needReverse = false;
+            if (phase == PHASE_PLAYING && !restart) {
+                resume();
+                return;
+            }
+            if (forward != null && forwardReady && forward.isPlaying()) forward.pause();
+            boolean atEnd = forwardPosition() >= forwardEndMs() - END_EPSILON_MS;
+            if (restart || atEnd) seekForward(0);
+            phase = PHASE_WAITING;
+            armed = true;
+            resume();
+        }
+
+        /** Играть вперёд, если всё позволяет. */
+        private void resume() {
+            if (forward == null || !forwardReady || reversing || phase == PHASE_DONE) return;
+            if (!canPlayForward()) return;
+            if (phase == PHASE_WAITING) {
+                if (!armed) return;
+                armed = false;
+                phase = PHASE_PLAYING;
+                playsLeft = cfg.plays;
+            }
+            if (!forward.isPlaying()) {
+                renderer.showSource(WallpaperRenderer.SOURCE_FORWARD);
+                forward.start();
+            }
+        }
+
+        private void startReverse() {
+            if (!reverseAvailable || backward == null || !backwardReady || !visible) return;
+            int position = forwardPosition();
+            needReverse = false;
+            if (position <= 0) return;
+            reversing = true;
+            seek(backward, lastFrameMs - Math.min(position, lastFrameMs));
+            backward.start();
+            renderer.showSource(WallpaperRenderer.SOURCE_REVERSE);
+        }
+
+        /** Останавливает реверс; оригинал встаёт на тот же кадр. */
+        private void stopReverse() {
+            if (!reversing) return;
+            reversing = false;
+            int position = clamp(lastFrameMs - backward.getCurrentPosition());
+            backward.pause();
+            seekForward(position);
+            renderer.showSource(WallpaperRenderer.SOURCE_FORWARD);
+        }
+
+        private void onBackwardCompleted(MediaPlayer mp) {
+            if (mp != backward || !reversing) return;
+            reversing = false;
+            seekForward(0);
+            renderer.showSource(WallpaperRenderer.SOURCE_FORWARD);
+        }
+
+        private void onForwardCompleted(MediaPlayer mp) {
+            if (mp != forward || cfg.infinite()) return;
+            playsLeft--;
+            if (playsLeft > 0) {
+                mp.start(); // после окончания start() начинает с начала
+                return;
+            }
+            phase = PHASE_DONE;
+            if (cfg.once && !isPreview()) {
+                finishedForever = true;
+                sp.edit().putBoolean(Prefs.KEY_FINISHED, true).apply();
+            }
+            if (cfg.endOnLastFrame) {
+                positionMs = AT_END; // на экране остаётся последний кадр
+            } else {
+                seekForward(0);
+            }
+        }
+
+        private void pauseAll() {
+            if (reversing) {
+                stopReverse();
+                // Реверс прервали — доиграем его при следующем появлении экрана блокировки.
+                needReverse = forwardPosition() > 0;
+            }
+            if (forward != null && forwardReady && forward.isPlaying()) forward.pause();
+        }
+
+        private int forwardPosition() {
+            if (reversing && backward != null) {
+                return clamp(lastFrameMs - backward.getCurrentPosition());
+            }
+            if (forward != null && forwardReady) return forward.getCurrentPosition();
+            return positionMs == AT_END ? forwardEndMs() : positionMs;
+        }
+
+        private int forwardEndMs() {
+            if (forward != null && forwardReady && forward.getDuration() > 0) {
+                return Math.max(0, forward.getDuration() - 50);
+            }
+            return lastFrameMs;
+        }
+
+        private void seekForward(int position) {
+            positionMs = position;
+            if (forward != null && forwardReady) seek(forward, position);
+        }
+
+        private int clamp(int position) {
+            return Math.max(0, Math.min(lastFrameMs, position));
+        }
+
+        private void seek(MediaPlayer mp, int positionMs) {
+            mp.seekTo(positionMs, MediaPlayer.SEEK_CLOSEST);
+        }
+
+        // ---- Плееры ----
+
+        private void openPlayers() {
+            if (renderer == null || forward != null) return;
             Context context = VideoWallpaperService.this;
-            File video = reversible ? Prefs.reversibleFile(context) : Prefs.videoFile(context);
+            File video = Prefs.videoFile(context);
             if (!video.isFile()) return;
+            forward = createPlayer(video, WallpaperRenderer.SOURCE_FORWARD, cfg.sound);
+            if (forward != null) {
+                forward.setLooping(cfg.infinite());
+                forward.setOnPreparedListener(mp -> {
+                    if (mp != forward) return;
+                    forwardReady = true;
+                    int end = forwardEndMs();
+                    seek(mp, positionMs == AT_END ? end : Math.min(positionMs, end));
+                    if (visible && locked() && needReverse) {
+                        startReverse();
+                    } else {
+                        resume();
+                    }
+                });
+                forward.setOnCompletionListener(this::onForwardCompleted);
+                forward.prepareAsync();
+            }
+            if (reverseAvailable) {
+                backward = createPlayer(Prefs.reverseFile(context),
+                        WallpaperRenderer.SOURCE_REVERSE, false);
+                if (backward != null) {
+                    backward.setOnPreparedListener(mp -> {
+                        if (mp != backward) return;
+                        backwardReady = true;
+                        if (visible && locked() && needReverse) startReverse();
+                    });
+                    backward.setOnCompletionListener(this::onBackwardCompleted);
+                    backward.prepareAsync();
+                }
+            }
+        }
 
+        private MediaPlayer createPlayer(File file, int source, boolean sound) {
             MediaPlayer mp = new MediaPlayer();
             try {
-                mp.setSurface(renderer.videoSurface());
-                mp.setDataSource(video.getAbsolutePath());
+                mp.setSurface(renderer.videoSurface(source));
+                mp.setDataSource(file.getAbsolutePath());
                 mp.setAudioAttributes(new AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_MEDIA)
                         .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
                         .build());
-                float volume = cfg.sound ? 1f : 0f;
+                float volume = sound ? 1f : 0f;
                 mp.setVolume(volume, volume);
-                mp.setLooping(cfg.infinite());
-                mp.setOnPreparedListener(this::onPrepared);
-                mp.setOnCompletionListener(this::onCompleted);
                 mp.setOnVideoSizeChangedListener((p, width, height) -> {
-                    if (p == player && renderer != null) renderer.setVideoSize(width, height);
+                    if (renderer != null) renderer.setVideoSize(source, width, height);
                 });
                 mp.setOnErrorListener((p, what, extra) -> {
-                    Log.w(TAG, "MediaPlayer error " + what + "/" + extra);
-                    if (p == player) closePlayer();
+                    Log.w(TAG, "MediaPlayer error " + what + "/" + extra + " source " + source);
+                    if (p == backward) {
+                        // Без реверса обойдёмся — возвращаем к началу мгновенно.
+                        reversing = false;
+                        reverseAvailable = false;
+                        releaseBackward();
+                        seekForward(0);
+                        if (renderer != null) {
+                            renderer.showSource(WallpaperRenderer.SOURCE_FORWARD);
+                        }
+                    } else if (p == forward) {
+                        closePlayers();
+                    }
                     return true;
                 });
-                mp.prepareAsync();
-                player = mp;
-                prepared = false;
+                return mp;
             } catch (Exception e) {
                 Log.w(TAG, "Cannot open video", e);
                 mp.release();
+                return null;
             }
         }
 
-        private void closePlayer() {
-            handler.removeCallbacks(forwardWatch);
-            if (player == null) return;
-            if (prepared) {
-                if (reversing) {
-                    resumePositionMs = toForward(player.getCurrentPosition());
-                    reversing = false;
-                } else if (phase == PHASE_PLAYING && !pendingRewind) {
-                    resumePositionMs = player.getCurrentPosition();
-                }
+        private void closePlayers() {
+            if (forward != null || backward != null) {
+                boolean wasReversing = reversing;
+                positionMs = forwardPosition();
+                reversing = false;
+                if (wasReversing) needReverse = positionMs > 0;
             }
-            player.release();
-            player = null;
-            prepared = false;
+            if (forward != null) {
+                forward.release();
+                forward = null;
+            }
+            forwardReady = false;
+            releaseBackward();
+        }
+
+        private void releaseBackward() {
+            if (backward != null) {
+                backward.release();
+                backward = null;
+            }
+            backwardReady = false;
         }
 
         private void releaseRenderer() {
@@ -304,212 +509,6 @@ public class VideoWallpaperService extends WallpaperService {
                 renderer.release();
                 renderer = null;
             }
-        }
-
-        private void onPrepared(MediaPlayer mp) {
-            if (mp != player) return;
-            prepared = true;
-            if (phase == PHASE_DONE && !pendingRewind) {
-                seek(mp, restAtStart ? 0 : endPositionMs(mp));
-            } else {
-                seek(mp, resumePositionMs);
-            }
-            tryPlay();
-        }
-
-        private void onCompleted(MediaPlayer mp) {
-            if (mp != player) return;
-            if (reversing) {
-                finishRewind();
-            } else if (!cfg.infinite()) {
-                onForwardEnd();
-            }
-        }
-
-        /** Видео доиграло вперёд до конца. */
-        private void onForwardEnd() {
-            playsLeft--;
-            if (playsLeft > 0) {
-                if (reversible) {
-                    seek(player, 0);
-                    player.start();
-                    watchForward();
-                } else {
-                    player.start(); // после окончания start() начинает с начала
-                }
-                return;
-            }
-            phase = PHASE_DONE;
-            resumePositionMs = 0;
-            restAtStart = !cfg.endOnLastFrame;
-            if (cfg.once && !isPreview()) {
-                finishedForever = true;
-                sp.edit().putBoolean(Prefs.KEY_FINISHED, true).apply();
-            }
-            if (!cfg.endOnLastFrame) seek(player, 0);
-            // Иначе на экране остаётся последний кадр.
-        }
-
-        // ---- События ----
-
-        private void onScreenOff() {
-            unlockedSinceScreenOff = isPreview();
-            hiddenByApp = false;
-            armed = isPreview();
-            pausePlayback();
-            if (cfg.lockAction == Prefs.LOCK_KEEP || atStart()) return;
-            if (cfg.lockAction == Prefs.LOCK_REVERSE && reversible && player != null && prepared) {
-                // Назад проиграем, когда экран снова включится.
-                if (!pendingRewind) resumePositionMs = currentForwardPosition();
-                pendingRewind = true;
-            } else {
-                // Мгновенно, пока экран выключен — к включению на экране первый кадр.
-                pendingRewind = false;
-                resumePositionMs = 0;
-                if (player != null && prepared) seek(player, 0);
-                if (phase == PHASE_DONE) restAtStart = true;
-            }
-            // Прерванная серия считается сброшенной — дальше ждём нового запуска.
-            if (phase == PHASE_PLAYING) phase = PHASE_WAITING;
-        }
-
-        private void onScreenOn() {
-            if (cfg.startOnScreenOn) triggerStart(false);
-        }
-
-        private void onUserPresent() {
-            unlockedSinceScreenOff = true;
-            if (cfg.startOnUnlock) {
-                triggerStart(false);
-            } else {
-                tryPlay();
-            }
-        }
-
-        // ---- Управление воспроизведением ----
-
-        /** Можно ли сейчас играть вперёд (на экране блокировки — только если так настроено). */
-        private boolean allowedNow() {
-            return unlockedSinceScreenOff || cfg.startOnScreenOn || isPreview();
-        }
-
-        /**
-         * Запуск по событию. Идущую серию продолжает, а с restartIfPlaying — начинает заново.
-         */
-        private void triggerStart(boolean restartIfPlaying) {
-            if (finishedForever) return;
-            if (reversing && player != null) {
-                // Запуск во время обратной перемотки — едем вперёд с того же кадра.
-                int position = toForward(player.getCurrentPosition());
-                player.pause();
-                reversing = false;
-                pendingRewind = false;
-                resumePositionMs = position;
-                seek(player, position);
-                phase = PHASE_PLAYING;
-                playsLeft = cfg.plays;
-                armed = false;
-                tryPlay();
-                return;
-            }
-            if (phase == PHASE_PLAYING && !restartIfPlaying) {
-                tryPlay();
-                return;
-            }
-            pausePlayback();
-            pendingRewind = false;
-            resumePositionMs = 0;
-            if (player != null && prepared) seek(player, 0);
-            phase = PHASE_WAITING;
-            armed = true;
-            tryPlay();
-        }
-
-        private void tryPlay() {
-            if (player == null || !prepared || !visible || reversing) return;
-            if (pendingRewind) {
-                if (armed && allowedNow()) {
-                    // Видео сейчас всё равно пойдёт вперёд — перематывать назад незачем.
-                    pendingRewind = false;
-                    resumePositionMs = 0;
-                    seek(player, 0);
-                } else {
-                    startRewind();
-                    return;
-                }
-            }
-            if (phase == PHASE_DONE || !allowedNow() || player.isPlaying()) return;
-            if (phase == PHASE_WAITING) {
-                if (!armed) return;
-                armed = false;
-                phase = PHASE_PLAYING;
-                playsLeft = cfg.plays;
-            }
-            player.start();
-            if (reversible) watchForward();
-        }
-
-        private void startRewind() {
-            reversing = true;
-            seek(player, toReverse(resumePositionMs));
-            player.start();
-        }
-
-        private void finishRewind() {
-            reversing = false;
-            pendingRewind = false;
-            resumePositionMs = 0;
-            seek(player, 0);
-            if (phase == PHASE_DONE) restAtStart = true;
-            tryPlay();
-        }
-
-        private void pausePlayback() {
-            handler.removeCallbacks(forwardWatch);
-            if (player == null || !prepared) return;
-            if (reversing) {
-                resumePositionMs = toForward(player.getCurrentPosition());
-                reversing = false;
-            }
-            if (player.isPlaying()) player.pause();
-        }
-
-        private void watchForward() {
-            handler.removeCallbacks(forwardWatch);
-            handler.post(forwardWatch);
-        }
-
-        private boolean atStart() {
-            if (pendingRewind) return false;
-            if (phase == PHASE_WAITING) return true;
-            if (phase == PHASE_DONE) return restAtStart;
-            return false;
-        }
-
-        private int currentForwardPosition() {
-            if (phase == PHASE_DONE) return restAtStart ? 0 : lastFrameMs;
-            return Math.min(player.getCurrentPosition(), lastFrameMs);
-        }
-
-        private int endPositionMs(MediaPlayer mp) {
-            return reversible ? lastFrameMs : Math.max(0, mp.getDuration() - 50);
-        }
-
-        private int toReverse(int forwardMs) {
-            return splitMs + (lastFrameMs - clamp(forwardMs));
-        }
-
-        private int toForward(int fileMs) {
-            if (!reversible || fileMs < splitMs) return clamp(fileMs);
-            return clamp(lastFrameMs - (fileMs - splitMs));
-        }
-
-        private int clamp(int forwardMs) {
-            return Math.max(0, Math.min(lastFrameMs, forwardMs));
-        }
-
-        private void seek(MediaPlayer mp, int positionMs) {
-            mp.seekTo(positionMs, MediaPlayer.SEEK_CLOSEST);
         }
 
         // ---- Приближение ----

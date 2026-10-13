@@ -29,10 +29,9 @@ final class Prefs {
     static final String KEY_VIDEO_VERSION = "video_version";
     static final String KEY_REVERSE_READY = "reverse_ready";
     static final String KEY_REVERSE_LAST_MS = "reverse_last_ms";
-    static final String KEY_REVERSE_SPLIT_MS = "reverse_split_ms";
     /** Версия способа подготовки реверса; при смене старый ролик готовится заново. */
     static final String KEY_REVERSE_FORMAT = "reverse_format";
-    static final int REVERSE_FORMAT = 2;
+    static final int REVERSE_FORMAT = 3;
     /** Видео уже отыграло в режиме «Только один раз» — больше не запускать. */
     static final String KEY_FINISHED = "finished";
     /** Меняется при изменении настроек; обои перечитывают их, не сбрасывая состояние. */
@@ -59,7 +58,6 @@ final class Prefs {
     final boolean zoomEffect;
     final boolean reverseReady;
     final int reverseLastMs;
-    final int reverseSplitMs;
     final boolean finished;
 
     private Prefs(SharedPreferences sp) {
@@ -77,7 +75,6 @@ final class Prefs {
         reverseReady = sp.getBoolean(KEY_REVERSE_READY, false)
                 && sp.getInt(KEY_REVERSE_FORMAT, 1) == REVERSE_FORMAT;
         reverseLastMs = sp.getInt(KEY_REVERSE_LAST_MS, 0);
-        reverseSplitMs = sp.getInt(KEY_REVERSE_SPLIT_MS, 0);
         finished = sp.getBoolean(KEY_FINISHED, false);
     }
 
@@ -85,7 +82,7 @@ final class Prefs {
         return plays == INFINITE;
     }
 
-    /** Нужен ли ролик «вперёд + назад»: реверс выбран и повтор не бесконечный. */
+    /** Нужно ли обратное видео: реверс выбран и повтор не бесконечный. */
     boolean wantsReverse() {
         return lockAction == LOCK_REVERSE && !infinite();
     }
@@ -102,8 +99,13 @@ final class Prefs {
         return new File(context.getFilesDir(), "wallpaper_video");
     }
 
-    /** Видео «вперёд + назад» для плавного возврата к началу. */
-    static File reversibleFile(Context context) {
+    /** Видео задом наперёд для плавного возврата к началу. */
+    static File reverseFile(Context context) {
+        return new File(context.getFilesDir(), "wallpaper_video_reverse.mp4");
+    }
+
+    /** Файл из старых версий («вперёд + назад»), больше не нужен. */
+    static File legacyReverseFile(Context context) {
         return new File(context.getFilesDir(), "wallpaper_video_pingpong.mp4");
     }
 

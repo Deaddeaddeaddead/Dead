@@ -80,6 +80,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         sp = Prefs.prefs(this);
+        //noinspection ResultOfMethodCallIgnored
+        Prefs.legacyReverseFile(this).delete();
         Prefs cfg = Prefs.load(this);
         plays = cfg.plays;
 
@@ -307,9 +309,10 @@ public class MainActivity extends Activity {
                         + "с этого места.");
                 break;
             case Prefs.LOCK_REVERSE:
-                lockDescription.setText("Видео плавно проигрывается назад на экране "
-                        + "блокировки. Нужна разовая подготовка видео; звук в этом режиме "
-                        + "не играет.");
+                lockDescription.setText("Когда появляется экран блокировки, видео плавно "
+                        + "идёт назад, а после разблокировки — вперёд с того же кадра. "
+                        + "Нужна разовая подготовка видео; вперёд играет оригинал без потери "
+                        + "качества.");
                 break;
             default:
                 lockDescription.setText("Пока экран выключен, видео возвращается "
@@ -402,7 +405,7 @@ public class MainActivity extends Activity {
             MAIN.post(() -> {
                 if (finalError == null) {
                     //noinspection ResultOfMethodCallIgnored
-                    Prefs.reversibleFile(app).delete();
+                    Prefs.reverseFile(app).delete();
                     sp.edit()
                             .putString(Prefs.KEY_VIDEO_NAME, name)
                             .putLong(Prefs.KEY_VIDEO_VERSION, System.nanoTime())
@@ -462,7 +465,7 @@ public class MainActivity extends Activity {
             return;
         }
         long version = prefs.getLong(Prefs.KEY_VIDEO_VERSION, 0);
-        File output = Prefs.reversibleFile(app);
+        File output = Prefs.reverseFile(app);
         File temp = new File(output.getPath() + ".tmp");
         reverseRunning = true;
         reversePercent = 0;
@@ -497,7 +500,6 @@ public class MainActivity extends Activity {
                             .putBoolean(Prefs.KEY_REVERSE_READY, true)
                             .putInt(Prefs.KEY_REVERSE_FORMAT, Prefs.REVERSE_FORMAT)
                             .putInt(Prefs.KEY_REVERSE_LAST_MS, (int) finalResult.lastFrameMs)
-                            .putInt(Prefs.KEY_REVERSE_SPLIT_MS, (int) finalResult.splitMs)
                             .apply();
                     Prefs.bumpRevision(app);
                 } else {
