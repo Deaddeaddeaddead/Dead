@@ -500,6 +500,7 @@ public class MainActivity extends Activity {
                     output.delete();
                     if (Prefs.load(app).wantsReverse()) ensureReverse(app);
                 } else if (finalResult != null) {
+                    EventLog.add(app, "реверс подготовлен, " + finalResult.check);
                     prefs.edit()
                             .putBoolean(Prefs.KEY_REVERSE_READY, true)
                             .putInt(Prefs.KEY_REVERSE_FORMAT, Prefs.REVERSE_FORMAT)
@@ -508,6 +509,7 @@ public class MainActivity extends Activity {
                     Prefs.bumpRevision(app);
                 } else {
                     reverseError = finalError;
+                    EventLog.add(app, "реверс не подготовлен: " + finalError);
                     prefs.edit().putInt(Prefs.KEY_LOCK_ACTION, Prefs.LOCK_REWIND).apply();
                     Prefs.bumpRevision(app);
                     if (shown != null) {

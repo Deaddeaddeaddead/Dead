@@ -30,7 +30,7 @@ final class Prefs {
     static final String KEY_REVERSE_LAST_MS = "reverse_last_ms";
     /** Версия способа подготовки реверса; при смене старый ролик готовится заново. */
     static final String KEY_REVERSE_FORMAT = "reverse_format";
-    static final int REVERSE_FORMAT = 4;
+    static final int REVERSE_FORMAT = 5;
     /** Видео уже отыграло в режиме «Только один раз» — больше не запускать. */
     static final String KEY_FINISHED = "finished";
     /** Меняется при изменении настроек; обои перечитывают их, не сбрасывая состояние. */

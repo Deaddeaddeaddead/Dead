@@ -1,12 +1,15 @@
 package com.dead.unlockvideo;
 
+import android.graphics.Bitmap;
 import android.graphics.SurfaceTexture;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
+import android.media.MediaMetadataRetriever;
 import android.media.MediaMuxer;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
@@ -41,6 +44,8 @@ final class VideoReverser {
          * позиции lastFrameMs - r в оригинале.
          */
         final long lastFrameMs;
+        /** Итог проверки кадров — для журнала. */
+        String check = "";
 
         Result(long lastFrameMs) {
             this.lastFrameMs = lastFrameMs;
@@ -54,7 +59,9 @@ final class VideoReverser {
         File intra = new File(output.getPath() + ".intra");
         try {
             int rotation = transcodeAllIntra(input, intra, progress);
-            return writeBackward(intra, output, rotation);
+            Result result = writeBackward(intra, output, rotation);
+            result.check = verify(input, output, result.lastFrameMs);
+            return result;
         } finally {
             //noinspection ResultOfMethodCallIgnored
             intra.delete();
@@ -165,6 +172,8 @@ final class VideoReverser {
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
             MediaCodec.BufferInfo encInfo = new MediaCodec.BufferInfo();
             float[] matrix = new float[16];
+            Bundle syncFrame = new Bundle();
+            syncFrame.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0);
             boolean inputDone = false;
             boolean decoderDone = false;
             boolean encoderDone = false;
@@ -226,6 +235,9 @@ final class VideoReverser {
                             texture.updateTexImage();
                             texture.getTransformMatrix(matrix);
                             renderer.draw(matrix, width, height, 1f, 1f);
+                            // Каждый кадр — самостоятельный (IDR), чтобы декодер не мог
+                            // переставить кадры при обратном порядке.
+                            encoder.setParameters(syncFrame);
                             egl.swap(info.presentationTimeUs * 1000);
                             if (durationUs > 0 && progress != null) {
                                 int percent = (int) Math.min(90,
@@ -351,6 +363,63 @@ final class VideoReverser {
             //noinspection ResultOfMethodCallIgnored
             raw.delete();
         }
+    }
+
+    /**
+     * Проверяет, что видео действительно перевёрнуто: первый кадр обратного видео должен
+     * быть похож на последний кадр оригинала больше, чем на первый.
+     */
+    private static String verify(File original, File reversed, long lastFrameMs)
+            throws IOException {
+        long endUs = lastFrameMs * 1000;
+        Bitmap originalFirst = thumb(original, 0);
+        Bitmap originalLast = thumb(original, endUs);
+        Bitmap reversedFirst = thumb(reversed, 0);
+        if (originalFirst == null || originalLast == null || reversedFirst == null) {
+            return "проверка кадров не удалась (не прочитались кадры)";
+        }
+        double toLast = difference(reversedFirst, originalLast);
+        double toFirst = difference(reversedFirst, originalFirst);
+        String numbers = String.format(java.util.Locale.ROOT,
+                "отличие от последнего кадра %.1f, от первого %.1f", toLast, toFirst);
+        if (difference(originalFirst, originalLast) < 4) {
+            return "проверка кадров: первый и последний кадры видео одинаковые, " + numbers;
+        }
+        if (toLast > toFirst) {
+            throw new IOException("обратное видео получилось в прямом порядке (" + numbers + ")");
+        }
+        return "проверка кадров пройдена: " + numbers;
+    }
+
+    private static Bitmap thumb(File file, long timeUs) {
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(file.getAbsolutePath());
+            Bitmap frame = retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST);
+            return frame == null ? null : Bitmap.createScaledBitmap(frame, 32, 32, true);
+        } catch (RuntimeException e) {
+            return null;
+        } finally {
+            try {
+                retriever.release();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    /** Среднее отличие цвета по каналам, 0..255. */
+    private static double difference(Bitmap a, Bitmap b) {
+        long sum = 0;
+        for (int y = 0; y < 32; y++) {
+            for (int x = 0; x < 32; x++) {
+                int p = a.getPixel(x, y);
+                int q = b.getPixel(x, y);
+                sum += Math.abs(((p >> 16) & 0xFF) - ((q >> 16) & 0xFF))
+                        + Math.abs(((p >> 8) & 0xFF) - ((q >> 8) & 0xFF))
+                        + Math.abs((p & 0xFF) - (q & 0xFF));
+            }
+        }
+        return sum / (32.0 * 32 * 3);
     }
 
     private static int align(float value, int alignment) {
