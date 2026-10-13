@@ -3,34 +3,4 @@
     <string name="app_name">Видеообои</string>
     <string name="wallpaper_name">Видео после разблокировки</string>
     <string name="wallpaper_description">Видеообои с настройкой количества проигрываний и запуском после разблокировки</string>
-
-    <string name="section_video">Видео</string>
-    <string name="pick_video">Выбрать видео</string>
-    <string name="no_video">Видео не выбрано</string>
-    <string name="video_selected">Выбрано: %1$s</string>
-    <string name="copying">Копирую видео…</string>
-    <string name="copy_failed">Не удалось скопировать видео: %1$s</string>
-
-    <string name="section_playback">Воспроизведение</string>
-    <string name="loop">Зациклить (бесконечно)</string>
-    <string name="play_count">Количество проигрываний подряд</string>
-    <string name="end_on_last_frame">После окончания оставить последний кадр</string>
-    <string name="end_on_last_frame_hint">Выключено — вернуться к первому кадру.</string>
-    <string name="sound">Звук</string>
-
-    <string name="section_start">Запуск</string>
-    <string name="after_unlock">Запускать только после разблокировки</string>
-    <string name="after_unlock_hint">На экране блокировки видео стоит на месте и стартует только после того, как вы разблокируете телефон.</string>
-
-    <string name="section_replay">Повтор</string>
-    <string name="replay">Проигрывать повторно</string>
-    <string name="replay_hint">Выключено — видео проиграется один раз и больше не запустится (пока вы не нажмёте «Проиграть заново» или не поменяете настройки).</string>
-    <string name="replay_after_lock">Заново после каждой блокировки экрана</string>
-    <string name="replay_after_lock_hint">С включённым «только после разблокировки» — проигрывается при каждой разблокировке.</string>
-    <string name="replay_on_home">Заново при каждом возврате на рабочий стол</string>
-
-    <string name="reset">Проиграть заново</string>
-    <string name="set_wallpaper">Установить как обои</string>
-    <string name="status_active">Эти обои сейчас установлены</string>
-    <string name="status_inactive">Эти обои ещё не установлены</string>
 </resources>

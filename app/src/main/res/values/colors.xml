@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_background">#1E2A44</color>
+    <color name="bg">#F4F5FA</color>
+    <color name="card">#FFFFFF</color>
+    <color name="thumb">#E4E7F1</color>
+    <color name="text">#191B23</color>
+    <color name="text2">#5D6070</color>
+    <color name="accent">#4859D6</color>
+    <color name="on_accent">#FFFFFF</color>
+    <color name="tonal">#E2E5FF</color>
+    <color name="on_tonal">#26318F</color>
+    <color name="ripple">#1F000000</color>
+    <color name="ripple_on_accent">#33FFFFFF</color>
 </resources>

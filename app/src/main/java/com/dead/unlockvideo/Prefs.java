@@ -5,7 +5,7 @@ import android.content.SharedPreferences;
 
 import java.io.File;
 
-/** Настройки обоев. Значения по умолчанию: один раз, без возврата, только после разблокировки. */
+/** Настройки обоев. По умолчанию: один раз, только после разблокировки, после блокировки — к началу. */
 final class Prefs {
     static final String KEY_LOOP = "loop";
     static final String KEY_PLAY_COUNT = "play_count";
@@ -15,7 +15,15 @@ final class Prefs {
     static final String KEY_REPLAY = "replay";
     static final String KEY_REPLAY_AFTER_LOCK = "replay_after_lock";
     static final String KEY_REPLAY_ON_HOME = "replay_on_home";
+    static final String KEY_REWIND_ON_LOCK = "rewind_on_lock";
+    static final String KEY_REWIND_REVERSE = "rewind_reverse";
+    static final String KEY_ZOOM_EFFECT = "zoom_effect";
     static final String KEY_VIDEO_NAME = "video_name";
+    /** Меняется при каждом новом видео — чтобы не принять реверс от старого. */
+    static final String KEY_VIDEO_VERSION = "video_version";
+    static final String KEY_REVERSE_READY = "reverse_ready";
+    static final String KEY_REVERSE_LAST_MS = "reverse_last_ms";
+    static final String KEY_REVERSE_SPLIT_MS = "reverse_split_ms";
     /** Видео уже отыграло и повтор выключен — больше не запускать. */
     static final String KEY_FINISHED = "finished";
     /** Меняется при любом изменении настроек; обои перезагружаются по нему. */
@@ -31,6 +39,12 @@ final class Prefs {
     final boolean replay;
     final boolean replayAfterLock;
     final boolean replayOnHome;
+    final boolean rewindOnLock;
+    final boolean rewindReverse;
+    final boolean zoomEffect;
+    final boolean reverseReady;
+    final int reverseLastMs;
+    final int reverseSplitMs;
     final boolean finished;
 
     private Prefs(SharedPreferences sp) {
@@ -42,6 +56,12 @@ final class Prefs {
         replay = sp.getBoolean(KEY_REPLAY, false);
         replayAfterLock = sp.getBoolean(KEY_REPLAY_AFTER_LOCK, true);
         replayOnHome = sp.getBoolean(KEY_REPLAY_ON_HOME, false);
+        rewindOnLock = sp.getBoolean(KEY_REWIND_ON_LOCK, true);
+        rewindReverse = sp.getBoolean(KEY_REWIND_REVERSE, false);
+        zoomEffect = sp.getBoolean(KEY_ZOOM_EFFECT, false);
+        reverseReady = sp.getBoolean(KEY_REVERSE_READY, false);
+        reverseLastMs = sp.getInt(KEY_REVERSE_LAST_MS, 0);
+        reverseSplitMs = sp.getInt(KEY_REVERSE_SPLIT_MS, 0);
         finished = sp.getBoolean(KEY_FINISHED, false);
     }
 
@@ -55,6 +75,11 @@ final class Prefs {
 
     static File videoFile(Context context) {
         return new File(context.getFilesDir(), "wallpaper_video");
+    }
+
+    /** Видео «вперёд + назад» для плавного возврата к началу. */
+    static File reversibleFile(Context context) {
+        return new File(context.getFilesDir(), "wallpaper_video_pingpong.mp4");
     }
 
     /** Сбрасывает «уже проиграно» и заставляет обои перечитать настройки. */
