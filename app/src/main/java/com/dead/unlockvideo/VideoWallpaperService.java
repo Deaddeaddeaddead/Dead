@@ -37,6 +37,8 @@ public class VideoWallpaperService extends WallpaperService {
      */
     private static final float HOME_ZOOM_THRESHOLD = 0.6f;
 
+    private static int engineCount;
+
     @Override
     public Engine onCreateEngine() {
         return new VideoEngine();
@@ -54,8 +56,21 @@ public class VideoWallpaperService extends WallpaperService {
 
         private final Handler handler = new Handler(Looper.getMainLooper());
 
+        /** Номер экземпляра — на некоторых прошивках экран блокировки рисует отдельный. */
+        private final int engineId = ++engineCount;
+
         private void log(String event) {
-            if (!isPreview()) EventLog.add(VideoWallpaperService.this, event);
+            EventLog.add(VideoWallpaperService.this, "[#" + engineId + " " + where() + "] " + event);
+        }
+
+        /** Где показаны эти обои: рабочий стол, экран блокировки или превью. */
+        private String where() {
+            if (isPreview()) return "превью";
+            if (Build.VERSION.SDK_INT < 34) return "обои";
+            int flags = getWallpaperFlags();
+            boolean home = (flags & android.app.WallpaperManager.FLAG_SYSTEM) != 0;
+            boolean lock = (flags & android.app.WallpaperManager.FLAG_LOCK) != 0;
+            return home && lock ? "стол+блок" : lock ? "блокировка" : home ? "стол" : "?" + flags;
         }
 
         private String state() {
@@ -176,6 +191,7 @@ public class VideoWallpaperService extends WallpaperService {
 
         @Override
         public void onDestroy() {
+            log("обои закрыты");
             handler.removeCallbacksAndMessages(null);
             sp.unregisterOnSharedPreferenceChangeListener(this);
             VideoWallpaperService.this.unregisterReceiver(screenReceiver);
