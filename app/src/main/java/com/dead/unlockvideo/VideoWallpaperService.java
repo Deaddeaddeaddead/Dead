@@ -1,11 +1,16 @@
 package com.dead.unlockvideo;
 
+import android.animation.ValueAnimator;
 import android.app.KeyguardManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.os.Build;
@@ -15,6 +20,7 @@ import android.os.PowerManager;
 import android.service.wallpaper.WallpaperService;
 import android.util.Log;
 import android.view.SurfaceHolder;
+import android.view.animation.DecelerateInterpolator;
 
 import java.io.File;
 
@@ -36,6 +42,14 @@ public class VideoWallpaperService extends WallpaperService {
      * недавних). Когда оно падает ниже этого порога, начался переход на рабочий стол.
      */
     private static final float HOME_ZOOM_THRESHOLD = 0.6f;
+    private static final long UNLOCK_ZOOM_MS = 650;
+    /** Параллакс на 100%: дополнительный масштаб, дающий запас для сдвига. */
+    private static final float PARALLAX_MAX_ZOOM = 0.12f;
+    /** Поворот (рад), при котором сдвиг доходит до края запаса. */
+    private static final float PARALLAX_MAX_ANGLE = 0.3f;
+    /** За сколько секунд смещение примерно возвращается к центру, если телефон не крутить. */
+    private static final float PARALLAX_RECENTER_S = 1.5f;
+    private static final float PARALLAX_SMOOTHING = 0.25f;
 
     private static int engineCount;
 
@@ -132,6 +146,47 @@ public class VideoWallpaperService extends WallpaperService {
         /** Вернулись из приложения, но пока в списке недавних — ждём рабочего стола. */
         private boolean pendingHome;
 
+        // Эффекты
+        /** Текущий масштаб от эффекта разблокировки. */
+        private float unlockScale = 1f;
+        private ValueAnimator unlockAnimator;
+        private SensorManager sensorManager;
+        private Sensor gyroscope;
+        private boolean gyroscopeOn;
+        private long lastGyroNs;
+        /** Накопленный поворот (рад) — плавно возвращается к нулю. */
+        private float angleX;
+        private float angleY;
+        /** Сглаженный сдвиг, -1..1. */
+        private float tiltX;
+        private float tiltY;
+
+        private final SensorEventListener gyroListener = new SensorEventListener() {
+            @Override
+            public void onSensorChanged(SensorEvent event) {
+                if (lastGyroNs != 0) {
+                    float dt = (event.timestamp - lastGyroNs) * 1e-9f;
+                    if (dt > 0f && dt < 0.1f) {
+                        // Поворот вокруг вертикальной оси двигает изображение вбок,
+                        // вокруг горизонтальной — вверх-вниз.
+                        angleX += event.values[1] * dt;
+                        angleY += event.values[0] * dt;
+                        float decay = (float) Math.exp(-dt / PARALLAX_RECENTER_S);
+                        angleX = clampAngle(angleX * decay);
+                        angleY = clampAngle(angleY * decay);
+                    }
+                }
+                lastGyroNs = event.timestamp;
+                tiltX += (angleX / PARALLAX_MAX_ANGLE - tiltX) * PARALLAX_SMOOTHING;
+                tiltY += (angleY / PARALLAX_MAX_ANGLE - tiltY) * PARALLAX_SMOOTHING;
+                applyTransform();
+            }
+
+            @Override
+            public void onAccuracyChanged(Sensor sensor, int accuracy) {
+            }
+        };
+
         /** Пока виден экран блокировки, следим за разблокировкой (лицо, задержки системы). */
         private final Runnable unlockWatch = new Runnable() {
             @Override
@@ -181,6 +236,10 @@ public class VideoWallpaperService extends WallpaperService {
 
             loadConfig();
             unlocked = unlockedNow();
+            sensorManager = context.getSystemService(SensorManager.class);
+            gyroscope = sensorManager == null ? null
+                    : sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
+            unlockScale = unlocked ? homeScale() : lockScale();
             phase = finishedForever ? PHASE_DONE : PHASE_WAITING;
             log("обои запущены, реверс " + (reverseAvailable ? "готов" : "недоступен"));
             positionMs = finishedForever && cfg.endOnLastFrame && cfg.lockAction == Prefs.LOCK_KEEP
@@ -193,6 +252,8 @@ public class VideoWallpaperService extends WallpaperService {
         public void onDestroy() {
             log("обои закрыты");
             handler.removeCallbacksAndMessages(null);
+            cancelUnlockZoom();
+            setGyroscope(false);
             sp.unregisterOnSharedPreferenceChangeListener(this);
             VideoWallpaperService.this.unregisterReceiver(screenReceiver);
             closePlayers();
@@ -205,6 +266,7 @@ public class VideoWallpaperService extends WallpaperService {
             super.onSurfaceChanged(holder, format, width, height);
             if (renderer == null) {
                 renderer = WallpaperRenderer.create(holder.getSurface(), width, height);
+                applyTransform();
                 openPlayers();
             } else {
                 renderer.setViewSize(width, height);
@@ -228,6 +290,7 @@ public class VideoWallpaperService extends WallpaperService {
                     + !unlockedNow() + ") " + state());
             if (!isVisible) {
                 handler.removeCallbacks(unlockWatch);
+                setGyroscope(false);
                 pendingHome = false;
                 hiddenByApp = power.isInteractive() && unlocked;
                 pauseAll();
@@ -236,6 +299,7 @@ public class VideoWallpaperService extends WallpaperService {
             boolean backFromApp = hiddenByApp;
             hiddenByApp = false;
             watchUnlock();
+            setGyroscope(cfg.parallax > 0);
             if (backFromApp && cfg.startOnHome && !isPreview()) {
                 if (cfg.startInRecents || !zoomReported || launcherZoom < HOME_ZOOM_THRESHOLD) {
                     log("запуск: возврат на рабочий стол");
@@ -279,6 +343,9 @@ public class VideoWallpaperService extends WallpaperService {
             handler.removeCallbacks(unlockWatch);
             hiddenByApp = false;
             armed = isPreview();
+            cancelUnlockZoom();
+            unlockScale = lockScale();
+            applyTransform();
             pauseAll();
             boolean atStart = forwardPosition() <= 30;
             if (cfg.lockAction == Prefs.LOCK_KEEP || atStart) return;
@@ -322,6 +389,7 @@ public class VideoWallpaperService extends WallpaperService {
             }
             unlocked = true;
             handler.removeCallbacks(unlockWatch);
+            animateUnlockZoom(homeScale());
             if (reversing) stopReverse();
             if (cfg.startOnUnlock) {
                 log("запуск: разблокировка");
@@ -339,16 +407,29 @@ public class VideoWallpaperService extends WallpaperService {
         @Override
         public void onSharedPreferenceChanged(SharedPreferences prefs, String key) {
             if (Prefs.KEY_REVISION.equals(key)) {
-                // Новые настройки, текущее состояние сохраняем.
-                closePlayers();
+                // Новые настройки, текущее воспроизведение сохраняем. Плееры пересоздаём,
+                // только если поменялось, есть ли обратное видео.
+                boolean hadReverse = reverseAvailable;
+                boolean nextReverse = reverseUsable(Prefs.load(VideoWallpaperService.this));
+                if (nextReverse != hadReverse) closePlayers();
                 loadConfig();
                 log("настройки обновлены, реверс " + (reverseAvailable ? "готов" : "недоступен"));
                 if (finishedForever) phase = PHASE_DONE;
                 if (needReverse && !reverseAvailable) {
                     needReverse = false;
-                    positionMs = 0;
+                    seekForward(0);
                 }
-                openPlayers();
+                if (forward == null) {
+                    openPlayers();
+                } else {
+                    float volume = cfg.sound ? 1f : 0f;
+                    forward.setVolume(volume, volume);
+                    forward.setLooping(cfg.infinite());
+                }
+                cancelUnlockZoom();
+                unlockScale = unlocked ? homeScale() : lockScale();
+                setGyroscope(visible && cfg.parallax > 0);
+                applyTransform();
             } else if (Prefs.KEY_PLAY_NOW.equals(key)) {
                 // «Проиграть сейчас» или новое видео: с начала, как только обои станут видны.
                 closePlayers();
@@ -364,10 +445,69 @@ public class VideoWallpaperService extends WallpaperService {
         private void loadConfig() {
             Context context = VideoWallpaperService.this;
             cfg = Prefs.load(context);
-            reverseAvailable = cfg.wantsReverse() && cfg.reverseReady && cfg.reverseLastMs > 0
-                    && Prefs.reverseFile(context).isFile();
+            reverseAvailable = reverseUsable(cfg);
             lastFrameMs = cfg.reverseLastMs;
             finishedForever = !isPreview() && cfg.once && cfg.finished;
+        }
+
+        private boolean reverseUsable(Prefs prefs) {
+            return prefs.wantsReverse() && prefs.reverseReady && prefs.reverseLastMs > 0
+                    && Prefs.reverseFile(VideoWallpaperService.this).isFile();
+        }
+
+        // ---- Эффекты ----
+
+        private float lockScale() {
+            return cfg.unlockZoom == Prefs.ZOOM_OUT ? 1f + cfg.unlockZoomAmount / 100f : 1f;
+        }
+
+        private float homeScale() {
+            return cfg.unlockZoom == Prefs.ZOOM_IN ? 1f + cfg.unlockZoomAmount / 100f : 1f;
+        }
+
+        private void applyTransform() {
+            if (renderer == null) return;
+            float parallaxZoom = 1f + PARALLAX_MAX_ZOOM * cfg.parallax / 100f;
+            renderer.setTransform(unlockScale * parallaxZoom, tiltX, tiltY);
+        }
+
+        private void animateUnlockZoom(float target) {
+            cancelUnlockZoom();
+            if (Math.abs(unlockScale - target) < 0.001f) return;
+            unlockAnimator = ValueAnimator.ofFloat(unlockScale, target);
+            unlockAnimator.setDuration(UNLOCK_ZOOM_MS);
+            unlockAnimator.setInterpolator(new DecelerateInterpolator(1.5f));
+            unlockAnimator.addUpdateListener(a -> {
+                unlockScale = (float) a.getAnimatedValue();
+                applyTransform();
+            });
+            unlockAnimator.start();
+        }
+
+        private void cancelUnlockZoom() {
+            if (unlockAnimator != null) {
+                unlockAnimator.cancel();
+                unlockAnimator = null;
+            }
+        }
+
+        /** Гироскоп работает, только пока обои видны и параллакс включён. */
+        private void setGyroscope(boolean on) {
+            if (on == gyroscopeOn || gyroscope == null) return;
+            gyroscopeOn = on;
+            if (on) {
+                lastGyroNs = 0;
+                sensorManager.registerListener(gyroListener, gyroscope,
+                        SensorManager.SENSOR_DELAY_GAME);
+            } else {
+                sensorManager.unregisterListener(gyroListener);
+                angleX = angleY = tiltX = tiltY = 0f;
+                applyTransform();
+            }
+        }
+
+        private float clampAngle(float angle) {
+            return Math.max(-PARALLAX_MAX_ANGLE, Math.min(PARALLAX_MAX_ANGLE, angle));
         }
 
         // ---- Логика воспроизведения ----

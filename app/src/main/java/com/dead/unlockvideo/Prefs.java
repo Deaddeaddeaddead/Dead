@@ -22,6 +22,10 @@ final class Prefs {
     static final String KEY_END_ON_LAST_FRAME = "end_on_last_frame";
     // При блокировке экрана
     static final String KEY_LOCK_ACTION = "lock_action";
+    // Эффекты
+    static final String KEY_UNLOCK_ZOOM = "unlock_zoom";
+    static final String KEY_UNLOCK_ZOOM_AMOUNT = "unlock_zoom_amount";
+    static final String KEY_PARALLAX = "parallax";
     // Дополнительно
     static final String KEY_SOUND = "sound";
 
@@ -48,6 +52,14 @@ final class Prefs {
     static final int LOCK_REWIND = 1;
     static final int LOCK_REVERSE = 2;
 
+    static final int ZOOM_NONE = 0;
+    /** При разблокировке видео плавно увеличивается. */
+    static final int ZOOM_IN = 1;
+    /** На экране блокировки видео увеличено, при разблокировке возвращается к обычному. */
+    static final int ZOOM_OUT = 2;
+    static final int MAX_ZOOM_AMOUNT = 25;
+    static final int MAX_PARALLAX = 100;
+
     final boolean startOnUnlock;
     final boolean startOnScreenOn;
     /** Считать разблокировкой подтверждение личности прямо на экране блокировки (лицом). */
@@ -58,6 +70,11 @@ final class Prefs {
     final int plays;
     final boolean endOnLastFrame;
     final int lockAction;
+    final int unlockZoom;
+    /** Сила масштаба при разблокировке, в процентах. */
+    final int unlockZoomAmount;
+    /** Сила параллакса, 0 — выключен. */
+    final int parallax;
     final boolean sound;
     final boolean reverseReady;
     final int reverseLastMs;
@@ -75,6 +92,11 @@ final class Prefs {
         endOnLastFrame = sp.getBoolean(KEY_END_ON_LAST_FRAME, true);
         int lock = sp.getInt(KEY_LOCK_ACTION, LOCK_REWIND);
         lockAction = lock >= LOCK_KEEP && lock <= LOCK_REVERSE ? lock : LOCK_REWIND;
+        int zoom = sp.getInt(KEY_UNLOCK_ZOOM, ZOOM_NONE);
+        unlockZoom = zoom >= ZOOM_NONE && zoom <= ZOOM_OUT ? zoom : ZOOM_NONE;
+        unlockZoomAmount = Math.max(1, Math.min(MAX_ZOOM_AMOUNT,
+                sp.getInt(KEY_UNLOCK_ZOOM_AMOUNT, 8)));
+        parallax = Math.max(0, Math.min(MAX_PARALLAX, sp.getInt(KEY_PARALLAX, 0)));
         sound = sp.getBoolean(KEY_SOUND, false);
         reverseReady = sp.getBoolean(KEY_REVERSE_READY, false)
                 && sp.getInt(KEY_REVERSE_FORMAT, 1) == REVERSE_FORMAT;

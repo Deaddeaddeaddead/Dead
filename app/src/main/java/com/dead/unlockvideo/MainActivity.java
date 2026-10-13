@@ -37,6 +37,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -78,6 +79,8 @@ public class MainActivity extends Activity {
     private View recentsItem;
     private LinearLayout screenOnItem;
     private TextView screenOnNote;
+    private Segmented zoomChoice;
+    private View zoomAmountItem;
     private LinearLayout reverseBox;
     private ProgressBar reverseProgress;
     private TextView reverseStatus;
@@ -223,6 +226,31 @@ public class MainActivity extends Activity {
         reverseBox.addView(reverseStatus);
         lockChoice.item.addView(reverseBox);
 
+        // Эффекты
+        section(root, "Эффекты");
+        zoomChoice = segmented(root, "Масштаб при разблокировке",
+                new String[] {"Нет", "Приблизить", "Отдалить"}, cfg.unlockZoom, index -> {
+                    sp.edit().putInt(Prefs.KEY_UNLOCK_ZOOM, index).apply();
+                    Prefs.bumpRevision(this);
+                    updateEnabled();
+                });
+        zoomChoice.item.addView(description("«Приблизить» — при разблокировке видео плавно "
+                + "увеличивается. «Отдалить» — на экране блокировки видео увеличено и при "
+                + "разблокировке плавно возвращается к обычному размеру."));
+        zoomAmountItem = sliderItem(root, "Сила масштаба", 1, Prefs.MAX_ZOOM_AMOUNT,
+                cfg.unlockZoomAmount, value -> value + "%", value -> {
+                    sp.edit().putInt(Prefs.KEY_UNLOCK_ZOOM_AMOUNT, value).apply();
+                    Prefs.bumpRevision(this);
+                });
+        LinearLayout parallaxItem = sliderItem(root, "Параллакс", 0, Prefs.MAX_PARALLAX,
+                cfg.parallax, value -> value == 0 ? "выкл." : value + "%", value -> {
+                    sp.edit().putInt(Prefs.KEY_PARALLAX, value).apply();
+                    Prefs.bumpRevision(this);
+                });
+        parallaxItem.addView(description("Изображение слегка смещается, когда вы "
+                + "поворачиваете телефон (по гироскопу), и плавно возвращается к центру. "
+                + "Видео при этом немного увеличивается, чтобы не было видно краёв."));
+
         // Дополнительно
         section(root, "Дополнительно");
         switchItem(root, Prefs.KEY_SOUND, cfg.sound, "Звук", null);
@@ -324,6 +352,7 @@ public class MainActivity extends Activity {
                 || checked(Prefs.KEY_START_ON_SCREEN_ON) || checked(Prefs.KEY_START_ON_HOME);
         noTriggerWarning.setVisibility(anyTrigger ? View.GONE : View.VISIBLE);
         setRowEnabled(recentsItem, checked(Prefs.KEY_START_ON_HOME));
+        setRowEnabled(zoomAmountItem, zoomChoice.selected != Prefs.ZOOM_NONE);
         boolean reverse = lockChoice.selected == Prefs.LOCK_REVERSE;
         setRowEnabled(screenOnItem, !reverse);
         screenOnNote.setVisibility(reverse ? View.VISIBLE : View.GONE);
@@ -767,6 +796,59 @@ public class MainActivity extends Activity {
             options[index].setEnabled(enabled);
             options[index].setAlpha(enabled ? 1f : 0.35f);
         }
+    }
+
+    interface IntFormat {
+        String format(int value);
+    }
+
+    interface OnValue {
+        void onValue(int value);
+    }
+
+    /** Плашка с ползунком: заголовок, значение справа, ползунок под ними. */
+    private LinearLayout sliderItem(LinearLayout root, String title, int min, int max,
+                                    int value, IntFormat format, OnValue listener) {
+        LinearLayout item = vertical();
+        LinearLayout card = card(item);
+        LinearLayout header = new LinearLayout(this);
+        header.setPadding(dp(24), dp(16), dp(24), 0);
+        TextView label = text(title, 17, R.color.text);
+        header.addView(label, new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView valueText = text(format.format(value), 15, R.color.accent);
+        valueText.setTypeface(Typeface.DEFAULT_BOLD);
+        header.addView(valueText);
+        card.addView(header);
+
+        SeekBar bar = new SeekBar(this);
+        bar.setMin(min);
+        bar.setMax(max);
+        bar.setProgress(value);
+        ColorStateList accent = ColorStateList.valueOf(getColor(R.color.accent));
+        bar.setProgressTintList(accent);
+        bar.setThumbTintList(accent);
+        bar.setProgressBackgroundTintList(ColorStateList.valueOf(getColor(R.color.tonal)));
+        bar.setPadding(dp(24), dp(12), dp(24), dp(18));
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                valueText.setText(format.format(progress));
+                if (fromUser) listener.onValue(progress);
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+            }
+        });
+        card.addView(bar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(item);
+        return item;
     }
 
     private Segmented segmented(LinearLayout root, String title, String[] labels, int initial,

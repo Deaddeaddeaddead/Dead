@@ -8,10 +8,11 @@ import android.view.Surface;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Рисует кадры видео на поверхность обоев через OpenGL на своём потоке: обрезает видео
- * под экран. Источников два — оригинал и обратное видео, на экран
+ * под экран, масштабирует и сдвигает его (эффекты). Источников два — оригинал и обратное видео, на экран
  * выводится один; переключение происходит, когда у нового источника появляется кадр,
  * чтобы не мигнуть устаревшей картинкой.
  */
@@ -32,6 +33,15 @@ final class WallpaperRenderer {
     private int viewWidth;
     private int viewHeight;
     private int active = SOURCE_FORWARD;
+    // Масштаб и сдвиг (-1..1 от доступного запаса) — пишутся с главного потока.
+    private volatile float zoom = 1f;
+    private volatile float shiftX;
+    private volatile float shiftY;
+    private final AtomicBoolean drawPosted = new AtomicBoolean();
+    private final Runnable drawTransform = () -> {
+        drawPosted.set(false);
+        draw();
+    };
     private int pending = -1;
 
     private final Runnable forceSwitch = () -> {
@@ -159,6 +169,17 @@ final class WallpaperRenderer {
         });
     }
 
+    /**
+     * Масштаб (1 — как есть) и сдвиг изображения: -1..1 от запаса, который даёт масштаб.
+     * Можно вызывать часто — лишние перерисовки схлопываются.
+     */
+    void setTransform(float zoom, float shiftX, float shiftY) {
+        this.zoom = Math.max(1f, zoom);
+        this.shiftX = Math.max(-1f, Math.min(1f, shiftX));
+        this.shiftY = Math.max(-1f, Math.min(1f, shiftY));
+        if (drawPosted.compareAndSet(false, true)) handler.post(drawTransform);
+    }
+
     void setVideoSize(int source, int width, int height) {
         handler.post(() -> {
             Input input = inputs[source];
@@ -209,8 +230,13 @@ final class WallpaperRenderer {
                 scaleY = videoAspect / viewAspect;
             }
         }
+        // Видимая доля кадра с учётом масштаба; сдвиг — в пределах запаса от масштаба.
+        float visibleX = scaleX / zoom;
+        float visibleY = scaleY / zoom;
+        float offsetX = 0.5f - visibleX / 2f + shiftX * (scaleX - visibleX) / 2f;
+        float offsetY = 0.5f - visibleY / 2f + shiftY * (scaleY - visibleY) / 2f;
         drawer.draw(input.textureId, input.matrix, viewWidth, viewHeight,
-                scaleX, scaleY);
+                visibleX, visibleY, offsetX, offsetY);
         egl.swap(-1);
     }
 }

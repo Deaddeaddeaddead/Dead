@@ -165,13 +165,19 @@ final class GlUtil {
 
         void draw(int texture, float[] texMatrix, int width, int height, float scaleX,
                   float scaleY) {
+            draw(texture, texMatrix, width, height, scaleX, scaleY,
+                    0.5f - scaleX / 2f, 0.5f - scaleY / 2f);
+        }
+
+        /** offsetX/offsetY — левый нижний угол видимой части кадра (0..1). */
+        void draw(int texture, float[] texMatrix, int width, int height, float scaleX,
+                  float scaleY, float offsetX, float offsetY) {
             clear(width, height);
             GLES20.glUseProgram(program);
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
             GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texture);
             GLES20.glUniformMatrix4fv(matrixHandle, 1, false, texMatrix, 0);
-            GLES20.glUniform4f(cropHandle, scaleX, scaleY,
-                    0.5f - scaleX / 2f, 0.5f - scaleY / 2f);
+            GLES20.glUniform4f(cropHandle, scaleX, scaleY, offsetX, offsetY);
             GLES20.glEnableVertexAttribArray(positionHandle);
             GLES20.glVertexAttribPointer(positionHandle, 2, GLES20.GL_FLOAT, false, 0, positions);
             GLES20.glEnableVertexAttribArray(texCoordHandle);
