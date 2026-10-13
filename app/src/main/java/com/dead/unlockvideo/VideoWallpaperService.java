@@ -10,6 +10,8 @@ import android.content.SharedPreferences;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.service.wallpaper.WallpaperService;
 import android.util.Log;
@@ -32,6 +34,8 @@ public class VideoWallpaperService extends WallpaperService {
     private static final int END_EPSILON_MS = 80;
     /** positionMs == AT_END — стоим на последнем кадре (длительность ещё неизвестна). */
     private static final int AT_END = Integer.MAX_VALUE;
+    /** Как часто проверять разблокировку, пока виден экран блокировки. */
+    private static final long UNLOCK_POLL_MS = 100;
 
     @Override
     public Engine onCreateEngine() {
@@ -48,6 +52,7 @@ public class VideoWallpaperService extends WallpaperService {
         /** Серия закончилась; на экране последний или первый кадр. */
         private static final int PHASE_DONE = 2;
 
+        private final Handler handler = new Handler(Looper.getMainLooper());
         private SharedPreferences sp;
         private Prefs cfg;
         private PowerManager power;
@@ -80,11 +85,29 @@ public class VideoWallpaperService extends WallpaperService {
         private boolean reversing;
         /** Обои закрыло приложение (а не выключение экрана). */
         private boolean hiddenByApp;
+        /**
+         * Телефон разблокирован: личность подтверждена (палец, лицо, код) или
+         * пришло событие разблокировки. Сбрасывается при выключении экрана.
+         */
+        private boolean unlocked;
 
         private float systemZoom;
         private float returnZoom;
         private boolean systemZoomSeen;
         private ValueAnimator returnZoomAnimator;
+
+        /** Пока виден экран блокировки, следим за разблокировкой (лицо, задержки системы). */
+        private final Runnable unlockWatch = new Runnable() {
+            @Override
+            public void run() {
+                if (!visible || unlocked) return;
+                if (unlockedNow()) {
+                    onUnlocked();
+                } else {
+                    handler.postDelayed(this, UNLOCK_POLL_MS);
+                }
+            }
+        };
 
         private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
             @Override
@@ -95,7 +118,7 @@ public class VideoWallpaperService extends WallpaperService {
                 } else if (Intent.ACTION_SCREEN_ON.equals(action)) {
                     onScreenOn();
                 } else if (Intent.ACTION_USER_PRESENT.equals(action)) {
-                    onUserPresent();
+                    onUnlocked();
                 }
             }
         };
@@ -120,6 +143,7 @@ public class VideoWallpaperService extends WallpaperService {
                 context.registerReceiver(screenReceiver, filter);
             }
 
+            unlocked = unlockedNow();
             loadConfig();
             phase = finishedForever ? PHASE_DONE : PHASE_WAITING;
             positionMs = finishedForever && cfg.endOnLastFrame && cfg.lockAction == Prefs.LOCK_KEEP
@@ -130,6 +154,7 @@ public class VideoWallpaperService extends WallpaperService {
 
         @Override
         public void onDestroy() {
+            handler.removeCallbacksAndMessages(null);
             cancelReturnZoom();
             sp.unregisterOnSharedPreferenceChangeListener(this);
             VideoWallpaperService.this.unregisterReceiver(screenReceiver);
@@ -163,7 +188,8 @@ public class VideoWallpaperService extends WallpaperService {
         public void onVisibilityChanged(boolean isVisible) {
             visible = isVisible;
             if (!isVisible) {
-                hiddenByApp = power.isInteractive() && !locked();
+                handler.removeCallbacks(unlockWatch);
+                hiddenByApp = power.isInteractive() && unlocked;
                 pauseAll();
                 // Обои закрыло приложение — приближаем, чтобы при возврате плавно отдалить.
                 // Если лаунчер сам присылает onZoomChanged, он делает это лучше нас.
@@ -177,9 +203,10 @@ public class VideoWallpaperService extends WallpaperService {
             boolean backFromApp = hiddenByApp;
             hiddenByApp = false;
             if (returnZoom > 0f) animateReturnZoom();
+            watchUnlock();
             if (backFromApp && cfg.startOnHome && !isPreview()) {
                 triggerForward(true);
-            } else if (locked() && needReverse) {
+            } else if (!unlocked && needReverse) {
                 startReverse();
             } else {
                 resume();
@@ -187,6 +214,8 @@ public class VideoWallpaperService extends WallpaperService {
         }
 
         private void onScreenOff() {
+            unlocked = isPreview();
+            handler.removeCallbacks(unlockWatch);
             hiddenByApp = false;
             armed = isPreview();
             pauseAll();
@@ -204,15 +233,30 @@ public class VideoWallpaperService extends WallpaperService {
         }
 
         private void onScreenOn() {
+            // Например, разблокировали лицом ещё до того, как экран включился полностью.
+            if (!unlocked && unlockedNow()) {
+                onUnlocked();
+                return;
+            }
+            watchUnlock();
             if (cfg.startOnScreenOn) {
                 triggerForward(false);
-            } else if (visible && locked() && needReverse) {
+            } else if (visible && !unlocked && needReverse) {
                 startReverse();
             }
         }
 
-        /** Разблокировали: реверс (если идёт) останавливается, дальше — вперёд. */
-        private void onUserPresent() {
+        /**
+         * Разблокировали (событие системы или подтверждение личности на экране блокировки):
+         * реверс, если идёт, останавливается, дальше видео идёт вперёд.
+         */
+        private void onUnlocked() {
+            if (unlocked) {
+                resume();
+                return;
+            }
+            unlocked = true;
+            handler.removeCallbacks(unlockWatch);
             if (reversing) stopReverse();
             if (cfg.startOnUnlock) {
                 triggerForward(false);
@@ -275,13 +319,25 @@ public class VideoWallpaperService extends WallpaperService {
 
         // ---- Логика воспроизведения ----
 
-        private boolean locked() {
-            return !isPreview() && keyguard.isKeyguardLocked();
+        /**
+         * Разблокирован ли телефон прямо сейчас. С защищённой блокировкой — подтверждена ли
+         * личность (при разблокировке лицом экран блокировки ещё может быть на месте),
+         * без защиты — убран ли экран блокировки.
+         */
+        private boolean unlockedNow() {
+            if (isPreview()) return true;
+            return keyguard.isKeyguardSecure() ? !keyguard.isDeviceLocked()
+                    : !keyguard.isKeyguardLocked();
+        }
+
+        private void watchUnlock() {
+            handler.removeCallbacks(unlockWatch);
+            if (visible && !unlocked) handler.postDelayed(unlockWatch, UNLOCK_POLL_MS);
         }
 
         /** Играть вперёд можно, когда обои видны и телефон разблокирован (или так настроено). */
         private boolean canPlayForward() {
-            return visible && (!locked() || cfg.startOnScreenOn);
+            return visible && (unlocked || cfg.startOnScreenOn);
         }
 
         /**
@@ -419,7 +475,7 @@ public class VideoWallpaperService extends WallpaperService {
                     forwardReady = true;
                     int end = forwardEndMs();
                     seek(mp, positionMs == AT_END ? end : Math.min(positionMs, end));
-                    if (visible && locked() && needReverse) {
+                    if (visible && !unlocked && needReverse) {
                         startReverse();
                     } else {
                         resume();
@@ -435,7 +491,7 @@ public class VideoWallpaperService extends WallpaperService {
                     backward.setOnPreparedListener(mp -> {
                         if (mp != backward) return;
                         backwardReady = true;
-                        if (visible && locked() && needReverse) startReverse();
+                        if (visible && !unlocked && needReverse) startReverse();
                     });
                     backward.setOnCompletionListener(this::onBackwardCompleted);
                     backward.prepareAsync();
