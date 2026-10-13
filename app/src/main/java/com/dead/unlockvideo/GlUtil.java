@@ -86,7 +86,8 @@ final class GlUtil {
      */
     static final class FrameDrawer {
         private static final String VERTEX_SHADER =
-                "uniform mat4 uTexMatrix;\n"
+                "precision highp float;\n"
+                + "uniform mat4 uTexMatrix;\n"
                 + "uniform vec4 uCrop;\n"
                 + "attribute vec4 aPosition;\n"
                 + "attribute vec2 aTexCoord;\n"
@@ -98,7 +99,12 @@ final class GlUtil {
                 + "}\n";
         private static final String FRAGMENT_SHADER =
                 "#extension GL_OES_EGL_image_external : require\n"
+                // mediump на больших кадрах даёт «ступеньки» и мыло — нужна высокая точность.
+                + "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
+                + "precision highp float;\n"
+                + "#else\n"
                 + "precision mediump float;\n"
+                + "#endif\n"
                 + "varying vec2 vTexCoord;\n"
                 + "uniform samplerExternalOES sTexture;\n"
                 + "void main() {\n"

@@ -75,6 +75,8 @@ public class VideoWallpaperService extends WallpaperService {
         private float returnZoom;
         private boolean systemZoomSeen;
         private ValueAnimator returnZoomAnimator;
+        /** Обои закрыло приложение (а не выключение экрана). */
+        private boolean hiddenByApp;
 
         private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
             @Override
@@ -158,19 +160,23 @@ public class VideoWallpaperService extends WallpaperService {
         public void onVisibilityChanged(boolean isVisible) {
             visible = isVisible;
             if (!isVisible) {
+                hiddenByApp = power.isInteractive();
                 pausePlayback();
                 // Обои закрыло приложение (а не выключение экрана) — приближаем,
                 // чтобы при возврате плавно отдалить. Если лаунчер сам присылает
                 // onZoomChanged, он делает это лучше нас.
-                if (cfg.zoomEffect && !systemZoomSeen && power.isInteractive()) {
+                if (cfg.zoomEffect && !systemZoomSeen && hiddenByApp) {
                     cancelReturnZoom();
                     returnZoom = 1f;
                     applyZoom();
                 }
                 return;
             }
+            boolean backFromApp = hiddenByApp;
+            hiddenByApp = false;
             if (returnZoom > 0f) animateReturnZoom();
-            if (phase == PHASE_DONE && cfg.replay && cfg.replayOnHome) {
+            if (backFromApp && cfg.replayOnHome && !isPreview()) {
+                // Вернулись из приложения на рабочий стол — проигрываем заново.
                 restartSeries();
             } else {
                 tryPlay();
@@ -323,6 +329,7 @@ public class VideoWallpaperService extends WallpaperService {
 
         private void onScreenOff() {
             unlockedSinceScreenOff = isPreview();
+            hiddenByApp = false;
             pausePlayback();
             boolean restart = cfg.replay && cfg.replayAfterLock && phase != PHASE_WAITING;
             boolean rewind = restart || (cfg.rewindOnLock && !cfg.loop);

@@ -6,6 +6,7 @@ import android.media.MediaCodecInfo;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
@@ -26,7 +27,6 @@ import java.util.List;
  */
 final class VideoReverser {
     private static final String OUT_MIME = MediaFormat.MIMETYPE_VIDEO_AVC;
-    private static final int MAX_SIDE = 1920;
     private static final long TIMEOUT_US = 10_000;
 
     interface Progress {
@@ -95,20 +95,49 @@ final class VideoReverser {
             int fps = Math.round(number(inFormat, MediaFormat.KEY_FRAME_RATE, 30f));
             if (fps <= 0 || fps > 240) fps = 30;
 
-            float scale = Math.min(1f, MAX_SIDE / (float) Math.max(srcWidth, srcHeight));
-            int width = Math.max(16, Math.round(srcWidth * scale) / 16 * 16);
-            int height = Math.max(16, Math.round(srcHeight * scale) / 16 * 16);
+            encoder = MediaCodec.createEncoderByType(OUT_MIME);
+            MediaCodecInfo.CodecCapabilities caps =
+                    encoder.getCodecInfo().getCapabilitiesForType(OUT_MIME);
+            MediaCodecInfo.VideoCapabilities video = caps.getVideoCapabilities();
+
+            // Сохраняем исходное разрешение, если кодировщик его тянет; иначе уменьшаем
+            // ровно настолько, насколько нужно, сохраняя пропорции.
+            int width = 0;
+            int height = 0;
+            for (float scale = 1f; scale > 0.2f; scale -= 0.05f) {
+                int w = align(srcWidth * scale, video.getWidthAlignment());
+                int h = align(srcHeight * scale, video.getHeightAlignment());
+                if (video.isSizeSupported(w, h)) {
+                    width = w;
+                    height = h;
+                    break;
+                }
+            }
+            if (width == 0) throw new IOException("кодировщик не поддерживает такой размер видео");
 
             MediaFormat outFormat = MediaFormat.createVideoFormat(OUT_MIME, width, height);
             outFormat.setInteger(MediaFormat.KEY_COLOR_FORMAT,
                     MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-            long bitrate = (long) width * height * fps * 3 / 10;
+            // Все кадры ключевые, поэтому битрейт нужен высокий — берём сколько позволяет кодировщик.
+            long wanted = (long) width * height * fps;
+            int maxBitrate = video.getBitrateRange().getUpper();
             outFormat.setInteger(MediaFormat.KEY_BIT_RATE,
-                    (int) Math.max(2_000_000L, Math.min(30_000_000L, bitrate)));
+                    (int) Math.min(maxBitrate, Math.max(10_000_000L, wanted)));
+            MediaCodecInfo.EncoderCapabilities encoderCaps = caps.getEncoderCapabilities();
+            if (Build.VERSION.SDK_INT >= 28 && encoderCaps.isBitrateModeSupported(
+                    MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CQ)) {
+                outFormat.setInteger(MediaFormat.KEY_BITRATE_MODE,
+                        MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CQ);
+                outFormat.setInteger(MediaFormat.KEY_QUALITY,
+                        encoderCaps.getQualityRange().getUpper());
+            } else if (encoderCaps.isBitrateModeSupported(
+                    MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)) {
+                outFormat.setInteger(MediaFormat.KEY_BITRATE_MODE,
+                        MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR);
+            }
             outFormat.setInteger(MediaFormat.KEY_FRAME_RATE, fps);
             outFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 0); // все кадры ключевые
 
-            encoder = MediaCodec.createEncoderByType(OUT_MIME);
             encoder.configure(outFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
             encoderSurface = encoder.createInputSurface();
             encoder.start();
@@ -304,6 +333,11 @@ final class VideoReverser {
                 muxer.release();
             }
         }
+    }
+
+    private static int align(float value, int alignment) {
+        int a = Math.max(2, alignment);
+        return Math.max(a, Math.round(value / a) * a);
     }
 
     private static float number(MediaFormat format, String key, float fallback) {

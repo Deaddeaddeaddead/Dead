@@ -168,6 +168,10 @@ public class MainActivity extends Activity {
         section(root, "Запуск");
         switchItem(root, Prefs.KEY_AFTER_UNLOCK, cfg.afterUnlock, "Только после разблокировки",
                 "На экране блокировки видео ждёт и стартует, когда вы разблокируете телефон.");
+        switchItem(root, Prefs.KEY_REPLAY_ON_HOME, cfg.replayOnHome,
+                "При возврате на рабочий стол",
+                "Видео проигрывается заново каждый раз, когда вы выходите из приложения "
+                        + "на рабочий стол. Работает независимо от раздела «Повтор».");
 
         // Блокировка
         section(root, "После блокировки");
@@ -194,8 +198,6 @@ public class MainActivity extends Activity {
         switchItem(root, Prefs.KEY_REPLAY_AFTER_LOCK, cfg.replayAfterLock,
                 "Заново после каждой блокировки",
                 "Вместе с «Только после разблокировки» — при каждой разблокировке.");
-        switchItem(root, Prefs.KEY_REPLAY_ON_HOME, cfg.replayOnHome,
-                "Заново при возврате на рабочий стол", null);
 
         // Эффекты
         section(root, "Эффекты");
@@ -215,6 +217,8 @@ public class MainActivity extends Activity {
 
         updateEnabled();
         updateVideo();
+        // Реверс включён, но ролик не готов или подготовлен старым способом — готовим.
+        if (cfg.rewindReverse && !cfg.reverseReady) ensureReverse(getApplicationContext());
         updateReverseStatus();
     }
 
@@ -269,7 +273,6 @@ public class MainActivity extends Activity {
                 finite && checked(Prefs.KEY_REWIND_ON_LOCK));
         boolean replay = checked(Prefs.KEY_REPLAY);
         setRowEnabled(rows.get(Prefs.KEY_REPLAY_AFTER_LOCK), replay);
-        setRowEnabled(rows.get(Prefs.KEY_REPLAY_ON_HOME), replay && finite);
     }
 
     private void setRowEnabled(View row, boolean enabled) {
@@ -307,10 +310,11 @@ public class MainActivity extends Activity {
             MediaMetadataRetriever retriever = new MediaMetadataRetriever();
             try {
                 retriever.setDataSource(video.getAbsolutePath());
-                frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
-                if (frame != null && frame.getWidth() > 900) {
-                    int height = Math.round(frame.getHeight() * 900f / frame.getWidth());
-                    frame = Bitmap.createScaledBitmap(frame, 900, height, true);
+                frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST);
+                int maxWidth = getResources().getDisplayMetrics().widthPixels;
+                if (frame != null && frame.getWidth() > maxWidth) {
+                    int height = Math.round(frame.getHeight() * (float) maxWidth / frame.getWidth());
+                    frame = Bitmap.createScaledBitmap(frame, maxWidth, height, true);
                 }
             } catch (RuntimeException ignored) {
             } finally {
@@ -412,8 +416,7 @@ public class MainActivity extends Activity {
     private static void ensureReverse(Context app) {
         SharedPreferences prefs = Prefs.prefs(app);
         File video = Prefs.videoFile(app);
-        if (reverseRunning || prefs.getBoolean(Prefs.KEY_REVERSE_READY, false)
-                || !video.isFile()) {
+        if (reverseRunning || Prefs.load(app).reverseReady || !video.isFile()) {
             return;
         }
         long version = prefs.getLong(Prefs.KEY_VIDEO_VERSION, 0);
@@ -450,6 +453,7 @@ public class MainActivity extends Activity {
                 } else if (finalResult != null) {
                     prefs.edit()
                             .putBoolean(Prefs.KEY_REVERSE_READY, true)
+                            .putInt(Prefs.KEY_REVERSE_FORMAT, Prefs.REVERSE_FORMAT)
                             .putInt(Prefs.KEY_REVERSE_LAST_MS, (int) finalResult.lastFrameMs)
                             .putInt(Prefs.KEY_REVERSE_SPLIT_MS, (int) finalResult.splitMs)
                             .apply();
@@ -472,7 +476,7 @@ public class MainActivity extends Activity {
 
     private void updateReverseStatus() {
         boolean wanted = checked(Prefs.KEY_REWIND_REVERSE);
-        boolean ready = sp.getBoolean(Prefs.KEY_REVERSE_READY, false);
+        boolean ready = Prefs.load(this).reverseReady;
         if (reverseRunning) {
             reverseBox.setVisibility(View.VISIBLE);
             reverseProgress.setVisibility(View.VISIBLE);

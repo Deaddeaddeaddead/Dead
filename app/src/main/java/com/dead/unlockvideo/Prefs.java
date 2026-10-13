@@ -24,6 +24,9 @@ final class Prefs {
     static final String KEY_REVERSE_READY = "reverse_ready";
     static final String KEY_REVERSE_LAST_MS = "reverse_last_ms";
     static final String KEY_REVERSE_SPLIT_MS = "reverse_split_ms";
+    /** Версия способа подготовки реверса; при смене старый ролик готовится заново. */
+    static final String KEY_REVERSE_FORMAT = "reverse_format";
+    static final int REVERSE_FORMAT = 2;
     /** Видео уже отыграло и повтор выключен — больше не запускать. */
     static final String KEY_FINISHED = "finished";
     /** Меняется при любом изменении настроек; обои перезагружаются по нему. */
@@ -59,7 +62,8 @@ final class Prefs {
         rewindOnLock = sp.getBoolean(KEY_REWIND_ON_LOCK, true);
         rewindReverse = sp.getBoolean(KEY_REWIND_REVERSE, false);
         zoomEffect = sp.getBoolean(KEY_ZOOM_EFFECT, false);
-        reverseReady = sp.getBoolean(KEY_REVERSE_READY, false);
+        reverseReady = sp.getBoolean(KEY_REVERSE_READY, false)
+                && sp.getInt(KEY_REVERSE_FORMAT, 1) == REVERSE_FORMAT;
         reverseLastMs = sp.getInt(KEY_REVERSE_LAST_MS, 0);
         reverseSplitMs = sp.getInt(KEY_REVERSE_SPLIT_MS, 0);
         finished = sp.getBoolean(KEY_FINISHED, false);
