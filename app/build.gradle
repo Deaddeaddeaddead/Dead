@@ -14,9 +14,23 @@ android {
         versionName '1.0'
     }
 
+    // Постоянный ключ, чтобы новые сборки ставились поверх старых без удаления.
+    signingConfigs {
+        shared {
+            storeFile file('signing.keystore')
+            storePassword 'videowallpaper'
+            keyAlias 'wallpaper'
+            keyPassword 'videowallpaper'
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig signingConfigs.shared
+        }
         release {
             minifyEnabled false
+            signingConfig signingConfigs.shared
         }
     }
 

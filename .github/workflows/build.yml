@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -13,11 +16,17 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - name: Build debug APK
+      - name: Build APK
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
-      - uses: actions/upload-artifact@v4
-        with:
-          name: unlock-video-wallpaper-apk
-          path: app/build/outputs/apk/debug/*.apk
+          ./gradlew assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk VideoWallpaper.apk
+      - name: Publish APK to release "latest"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest VideoWallpaper.apk \
+            --target "${{ github.sha }}" \
+            --title "Видеообои — последняя сборка" \
+            --notes "Скачайте VideoWallpaper.apk и установите на телефон."
