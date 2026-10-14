@@ -171,8 +171,8 @@ final class Prefs {
                 sp.getInt(KEY_ZOOM_DURATION, 7)));
         sound = sp.getBoolean(KEY_SOUND, false);
         source = sp.getInt(KEY_SOURCE, SOURCE_VIDEO) == SOURCE_GLASS ? SOURCE_GLASS : SOURCE_VIDEO;
-        scene = Math.max(0, Math.min(ScenePresets.COUNT - 1, sp.getInt(KEY_SCENE,
-                ScenePresets.ORIGINAL)));
+        int sceneId = sp.getInt(KEY_SCENE, ScenePresets.ORIGINAL);
+        scene = ScenePresets.exists(sceneId) ? sceneId : ScenePresets.ORIGINAL;
         glassPalette = Math.max(GlassScene.PALETTE_AMBER, Math.min(GlassScene.PALETTE_CUSTOM,
                 sp.getInt(KEY_GLASS_PALETTE, GlassScene.PALETTE_AMBER)));
         // Не заданные цвета — из прежних настроек оттенков (по умолчанию — «Янтарь»).

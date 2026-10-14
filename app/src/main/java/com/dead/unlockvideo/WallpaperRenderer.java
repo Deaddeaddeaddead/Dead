@@ -376,7 +376,7 @@ final class WallpaperRenderer {
             if (scene == null) {
                 try {
                     scene = sceneId == ScenePresets.ORIGINAL ? new GlassScene()
-                            : new ProceduralScene(ScenePresets.get(sceneId));
+                            : new ProceduralScene(ScenePresets.shader(sceneId));
                 } catch (java.io.IOException e) {
                     Log.w(TAG, "scene shader failed", e);
                     ErrorListener listener = errorListener;

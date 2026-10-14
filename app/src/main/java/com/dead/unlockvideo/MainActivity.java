@@ -586,7 +586,7 @@ public class MainActivity extends Activity {
     }
 
     private static String glassSubtitle(int tint) {
-        return "Кант и свет в стекле, в волнах и сиянии — акцент · "
+        return "Кант и свет в стекле, в волнах — цвет слоёв · "
                 + (tint == 0 ? "прозрачное" : "тонировка " + tint + "%");
     }
 
@@ -612,18 +612,18 @@ public class MainActivity extends Activity {
         scroll.setClipToPadding(false);
         scroll.setPadding(dp(16), 0, dp(16), dp(8));
         LinearLayout row = new LinearLayout(this);
-        TextView[] chips = new TextView[ScenePresets.COUNT];
-        for (int i = 0; i < ScenePresets.COUNT; i++) {
-            TextView chip = text(ScenePresets.TITLES[i], 15, R.color.text);
+        TextView[] chips = new TextView[ScenePresets.LIST.length];
+        for (int i = 0; i < chips.length; i++) {
+            TextView chip = text(ScenePresets.title(ScenePresets.LIST[i]), 15, R.color.text);
             chip.setTypeface(Typeface.DEFAULT_BOLD);
             chip.setGravity(Gravity.CENTER);
             chip.setPadding(dp(18), 0, dp(18), 0);
-            final int index = i;
+            final int id = ScenePresets.LIST[i];
             chip.setOnClickListener(v -> {
-                if (scene == index) return;
-                scene = index;
+                if (scene == id) return;
+                scene = id;
                 styleChips(chips);
-                sp.edit().putInt(Prefs.KEY_SCENE, index).apply();
+                sp.edit().putInt(Prefs.KEY_SCENE, id).apply();
                 Prefs.bumpRevision(this);
                 previewPalette();
                 playGlassPreview();
@@ -638,12 +638,18 @@ public class MainActivity extends Activity {
         scroll.addView(row);
         island.addView(scroll);
         // Выбранная сцена видна, даже если она в конце ряда.
-        scroll.post(() -> scroll.smoothScrollTo(Math.max(0, chips[scene].getLeft() - dp(16)), 0));
+        scroll.post(() -> {
+            for (int i = 0; i < chips.length; i++) {
+                if (ScenePresets.LIST[i] == scene) {
+                    scroll.smoothScrollTo(Math.max(0, chips[i].getLeft() - dp(16)), 0);
+                }
+            }
+        });
     }
 
     private void styleChips(TextView[] chips) {
         for (int i = 0; i < chips.length; i++) {
-            boolean on = i == scene;
+            boolean on = ScenePresets.LIST[i] == scene;
             chips[i].setBackgroundResource(on ? R.drawable.segment_selected : R.drawable.segment_bg);
             chips[i].setTextColor(getColor(on ? R.color.on_accent : R.color.text));
         }
