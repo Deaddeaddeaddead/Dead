@@ -344,8 +344,9 @@ public class VideoWallpaperService extends WallpaperService {
             sp = Prefs.prefs(context);
             sp.registerOnSharedPreferenceChangeListener(this);
             LauncherState.addListener(this);
-            // Таблица света стекла — 128 КБ из assets, один раз на процесс.
+            // Таблица света стекла — 128 КБ из assets и шейдеры сцен, один раз на процесс.
             GlassScene.load(context);
+            ProceduralScene.load(context);
 
             IntentFilter filter = new IntentFilter();
             filter.addAction(Intent.ACTION_SCREEN_OFF);
@@ -696,7 +697,9 @@ public class VideoWallpaperService extends WallpaperService {
                     if (phase == PHASE_PLAYING) phase = PHASE_WAITING;
                 }
                 loadConfig();
-                if (renderer != null) renderer.setScene(glass ? GlassScene.palette(cfg) : null);
+                if (renderer != null) {
+                    renderer.setScene(cfg.scene, glass ? GlassScene.palette(cfg) : null);
+                }
                 log("настройки обновлены, реверс " + (reverseAvailable ? "готов" : "недоступен"));
                 if (finishedForever) phase = PHASE_DONE;
                 if (needReverse && !reverseAvailable) {
@@ -754,7 +757,7 @@ public class VideoWallpaperService extends WallpaperService {
                 // Сцена рисуется сразу; в превью — неподвижный кадр покоя.
                 stillRequest++;
                 if (target != null) {
-                    target.setScene(GlassScene.palette(cfg));
+                    target.setScene(cfg.scene, GlassScene.palette(cfg));
                     if (isPreview()) {
                         float rest = restAtEnd() ? 1f : 0f;
                         target.setSceneSource(WallpaperRenderer.SOURCE_FORWARD,
@@ -778,7 +781,7 @@ public class VideoWallpaperService extends WallpaperService {
                 notifyColorsChanged();
                 return;
             }
-            if (target != null) target.setScene(null);
+            if (target != null) target.setScene(cfg.scene, null);
             boolean restEnd = restAtEnd();
             // Превью — кадр покоя; обои — кадр, с которого пойдёт видео.
             boolean showEnd = isPreview() ? restEnd : positionMs == AT_END;
@@ -1208,7 +1211,7 @@ public class VideoWallpaperService extends WallpaperService {
             clip.setOnChange(() -> {
                 if (renderer != null) renderer.requestSceneFrame();
             });
-            renderer.setScene(GlassScene.palette(cfg));
+            renderer.setScene(cfg.scene, GlassScene.palette(cfg));
             renderer.setSceneSource(source, clip);
             return clip;
         }

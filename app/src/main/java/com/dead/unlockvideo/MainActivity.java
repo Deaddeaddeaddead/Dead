@@ -83,7 +83,7 @@ public class MainActivity extends Activity {
             "Увеличивается после разблокировки",
             "Увеличено на блокировке, после разблокировки — как обычно"};
     private static final String[] ZOOM_SPEED_TEXT = {"Вместе с видео или реверсом", null};
-    private static final String[] SOURCE_TEXT = {"Ваш ролик", "Стеклянные капсулы — рисуются на телефоне"};
+    private static final String[] SOURCE_TEXT = {"Ваш ролик", "Рисуется на телефоне — выберите сцену ниже"};
 
     private SharedPreferences sp;
     private final Map<String, Switch> switches = new HashMap<>();
@@ -91,11 +91,13 @@ public class MainActivity extends Activity {
     private TextView thumbnailHint;
     private TextView videoName;
     private Button pickButton;
-    /** Режим «Стекло»: сцена из кода вместо видео. */
+    /** Режим «Сцена»: картинка из кода вместо видео. */
     private boolean glass;
     private Segmented sourceChoice;
     private LinearLayout videoGroup;
     private LinearLayout glassGroup;
+    /** Сцена: ScenePresets.*. */
+    private int scene;
     private int glassPalette;
     /** Свои цвета стекла: по части сцены, тонировка стёкол, яркость (см. GlassScene.custom). */
     private int[] glassColors;
@@ -136,6 +138,7 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         sp = Prefs.prefs(this);
         GlassScene.load(this);
+        ProceduralScene.load(this);
         //noinspection ResultOfMethodCallIgnored
         Prefs.legacyReverseFile(this).delete();
         Prefs cfg = Prefs.load(this);
@@ -189,6 +192,7 @@ public class MainActivity extends Activity {
 
         // Что показывать
         glass = cfg.glass();
+        scene = cfg.scene;
         glassPalette = cfg.glassPalette;
         glassColors = cfg.glassColors.clone();
         glassTintTop = cfg.glassTintTop;
@@ -197,7 +201,7 @@ public class MainActivity extends Activity {
         glassDurationMs = cfg.glassDurationMs;
         LinearLayout sourceIsland = island(root, "Обои");
         sourceChoice = new Segmented(sourceIsland, "Что показывать",
-                new String[] {"Видео", "Стекло"}, glass ? 1 : 0, index -> {
+                new String[] {"Видео", "Сцена"}, glass ? 1 : 0, index -> {
                     glass = index == 1;
                     sp.edit().putInt(Prefs.KEY_SOURCE,
                             glass ? Prefs.SOURCE_GLASS : Prefs.SOURCE_VIDEO).apply();
@@ -209,10 +213,10 @@ public class MainActivity extends Activity {
                     updateSource();
                 });
 
-        // Стекло
+        // Сцена
         glassGroup = vertical();
         root.addView(glassGroup);
-        LinearLayout glassIsland = island(glassGroup, "Стекло");
+        LinearLayout glassIsland = island(glassGroup, "Сцена");
         FrameLayout glassFrame = new FrameLayout(this);
         glassFrame.setBackgroundResource(R.drawable.thumb_bg);
         glassFrame.setClipToOutline(true);
@@ -232,6 +236,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(230));
         glassParams.setMargins(dp(16), dp(16), dp(16), dp(16));
         glassIsland.addView(glassFrame, glassParams);
+        sceneChips(glassIsland);
         new Segmented(glassIsland, "Цвет",
                 new String[] {"Янтарь", "Лёд", "Аметист", "Изумруд", "Свой"}, glassPalette,
                 index -> {
@@ -554,8 +559,8 @@ public class MainActivity extends Activity {
             GlassScene.COLOR_GLASS_BOTTOM, GlassScene.COLOR_BACKGROUND, GlassScene.COLOR_CORNERS,
     };
     private static final String[] COLOR_TITLES = {
-            "Светящаяся капсула", "Свет вокруг капсулы", "Верхнее стекло", "Нижнее стекло",
-            "Фон", "Подсветка углов",
+            "Светящиеся формы", "Свет вокруг них", "Стёкла: цвет 1", "Стёкла: цвет 2", "Фон",
+            "Подсветка углов",
     };
     /** Быстрые цвета в пикере. */
     private static final int[] QUICK_COLORS = {
@@ -581,7 +586,8 @@ public class MainActivity extends Activity {
     }
 
     private static String glassSubtitle(int tint) {
-        return "Кант и свет в стекле · " + (tint == 0 ? "прозрачное" : "тонировка " + tint + "%");
+        return "Кант и свет в стекле, в волнах и сиянии — акцент · "
+                + (tint == 0 ? "прозрачное" : "тонировка " + tint + "%");
     }
 
     private Drawable swatchDrawable(int color) {
@@ -596,10 +602,57 @@ public class MainActivity extends Activity {
         return String.format(java.util.Locale.ROOT, "#%06X", color & 0xffffff);
     }
 
+    /**
+     * Ряд сцен под превью — «таблетки» с прокруткой вбок. Выбранная сразу играет в превью и
+     * уходит в настройки (обои перечитают их).
+     */
+    private void sceneChips(LinearLayout island) {
+        android.widget.HorizontalScrollView scroll = new android.widget.HorizontalScrollView(this);
+        scroll.setHorizontalScrollBarEnabled(false);
+        scroll.setClipToPadding(false);
+        scroll.setPadding(dp(16), 0, dp(16), dp(8));
+        LinearLayout row = new LinearLayout(this);
+        TextView[] chips = new TextView[ScenePresets.COUNT];
+        for (int i = 0; i < ScenePresets.COUNT; i++) {
+            TextView chip = text(ScenePresets.TITLES[i], 15, R.color.text);
+            chip.setTypeface(Typeface.DEFAULT_BOLD);
+            chip.setGravity(Gravity.CENTER);
+            chip.setPadding(dp(18), 0, dp(18), 0);
+            final int index = i;
+            chip.setOnClickListener(v -> {
+                if (scene == index) return;
+                scene = index;
+                styleChips(chips);
+                sp.edit().putInt(Prefs.KEY_SCENE, index).apply();
+                Prefs.bumpRevision(this);
+                previewPalette();
+                playGlassPreview();
+            });
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dp(40));
+            params.rightMargin = dp(8);
+            row.addView(chip, params);
+            chips[i] = chip;
+        }
+        styleChips(chips);
+        scroll.addView(row);
+        island.addView(scroll);
+        // Выбранная сцена видна, даже если она в конце ряда.
+        scroll.post(() -> scroll.smoothScrollTo(Math.max(0, chips[scene].getLeft() - dp(16)), 0));
+    }
+
+    private void styleChips(TextView[] chips) {
+        for (int i = 0; i < chips.length; i++) {
+            boolean on = i == scene;
+            chips[i].setBackgroundResource(on ? R.drawable.segment_selected : R.drawable.segment_bg);
+            chips[i].setTextColor(getColor(on ? R.color.on_accent : R.color.text));
+        }
+    }
+
     /** Текущая палитра стекла — в превью. */
     private void previewPalette() {
         if (glassRenderer == null) return;
-        glassRenderer.setScene(GlassScene.palette(glassPalette, glassColors, glassTintTop,
+        glassRenderer.setScene(scene, GlassScene.palette(glassPalette, glassColors, glassTintTop,
                 glassTintBottom, glassBrightness));
     }
 
@@ -650,8 +703,8 @@ public class MainActivity extends Activity {
         Runnable apply = () -> {
             float[] pal = GlassScene.palette(GlassScene.PALETTE_CUSTOM, colors, tints[0],
                     tints[1], glassBrightness);
-            if (preview[0] != null) preview[0].setScene(pal);
-            if (glassRenderer != null) glassRenderer.setScene(pal);
+            if (preview[0] != null) preview[0].setScene(scene, pal);
+            if (glassRenderer != null) glassRenderer.setScene(scene, pal);
         };
 
         LinearLayout content = vertical();
@@ -1261,7 +1314,7 @@ public class MainActivity extends Activity {
     private void updateHero() {
         boolean hasVideo = Prefs.videoFile(this).isFile();
         if (glass) {
-            heroTitle.setText(wallpaperActive ? "Обои установлены" : "Стекло готово");
+            heroTitle.setText(wallpaperActive ? "Обои установлены" : "Сцена готова");
             heroSubtitle.setText(wallpaperActive ? "Настройки ниже применяются сразу"
                     : "Осталось установить его как обои");
         } else if (!hasVideo) {

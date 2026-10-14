@@ -37,6 +37,8 @@ final class Prefs {
     // Источник: видео или сцена «Стекло»
     static final String KEY_SOURCE = "source";
     static final String KEY_GLASS_PALETTE = "glass_palette";
+    /** Какая сцена в режиме «Сцена»: ScenePresets.*. */
+    static final String KEY_SCENE = "scene";
     /** Свои цвета стекла (ARGB) по частям сцены — GlassScene.COLOR_*. */
     static final String[] KEY_GLASS_COLORS = {
             "glass_color_background", "glass_color_glow", "glass_color_light",
@@ -126,6 +128,8 @@ final class Prefs {
     final boolean sound;
     /** SOURCE_*. */
     final int source;
+    /** Сцена: ScenePresets.*. */
+    final int scene;
     /** Палитра стекла: GlassScene.PALETTE_*. */
     final int glassPalette;
     /** Свои цвета стекла (GlassScene.PALETTE_CUSTOM): ARGB по GlassScene.COLOR_*. */
@@ -167,6 +171,8 @@ final class Prefs {
                 sp.getInt(KEY_ZOOM_DURATION, 7)));
         sound = sp.getBoolean(KEY_SOUND, false);
         source = sp.getInt(KEY_SOURCE, SOURCE_VIDEO) == SOURCE_GLASS ? SOURCE_GLASS : SOURCE_VIDEO;
+        scene = Math.max(0, Math.min(ScenePresets.COUNT - 1, sp.getInt(KEY_SCENE,
+                ScenePresets.ORIGINAL)));
         glassPalette = Math.max(GlassScene.PALETTE_AMBER, Math.min(GlassScene.PALETTE_CUSTOM,
                 sp.getInt(KEY_GLASS_PALETTE, GlassScene.PALETTE_AMBER)));
         // Не заданные цвета — из прежних настроек оттенков (по умолчанию — «Янтарь»).

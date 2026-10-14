@@ -23,7 +23,7 @@ import java.nio.FloatBuffer;
  * более близкие к глазу, сдвигаются относительно капсулы, а вид сквозь них меняется. Картинка
  * гладкая и чёткая в любом разрешении и перекрашивается в палитру.
  */
-final class GlassScene {
+final class GlassScene implements Scene {
     /** Сцена построена на кадре этого размера и обрезается под экран так же, как видео. */
     static final int FRAME_WIDTH = 1120;
     static final int FRAME_HEIGHT = 2436;
@@ -475,7 +475,8 @@ final class GlassScene {
      * сцены, ширина кадра — 1): стёкла смещаются относительно светящейся капсулы, а
      * преломление в них считается из сдвинутой точки. pal — палитра (см. palette).
      */
-    void draw(int width, int height, float[] cropBox, float t, float[] pal,
+    @Override
+    public void draw(int width, int height, float[] cropBox, float t, float[] pal,
             float viewX, float viewY) {
         float clamped = Math.max(0f, Math.min(1f, t));
         GLES20.glViewport(0, 0, width, height);
@@ -495,6 +496,12 @@ final class GlassScene {
         GLES20.glVertexAttribPointer(position, 2, GLES20.GL_FLOAT, false, 0, quad);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+    }
+
+    @Override
+    public void release() {
+        GLES20.glDeleteProgram(program);
+        GLES20.glDeleteTextures(1, new int[] {lightTexture}, 0);
     }
 
     /** Палитра из настроек: готовая или свои цвета. */

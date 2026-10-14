@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * под экран, масштабирует и сдвигает его (эффекты). Источников два — оригинал и обратное видео, на экран
  * выводится один; переключение происходит, когда у нового источника появляется кадр,
  * чтобы не мигнуть устаревшей картинкой. Пока у видео нет кадра, показывается неподвижный
- * кадр-картинка (если задан). В режиме «Стекло» вместо видео рисуется сцена (GlassScene):
+ * кадр-картинка (если задан). В режиме «Сцена» вместо видео рисуется сцена (ScenePresets):
  * кадр по ходу её часов, покадрово, только пока она движется.
  */
 final class WallpaperRenderer {
@@ -88,7 +88,9 @@ final class WallpaperRenderer {
 
     /** Палитра сцены; null — режим видео. */
     private float[] scenePalette;
-    private GlassScene scene;
+    /** Какая сцена (ScenePresets.*) и её шейдер — создаётся при первом кадре. */
+    private int sceneId = ScenePresets.ORIGINAL;
+    private Scene scene;
     private final SceneSource[] sceneSources = new SceneSource[2];
     private Choreographer choreographer;
     private boolean frameScheduled;
@@ -275,11 +277,20 @@ final class WallpaperRenderer {
         stillTexture = 0;
     }
 
-    /** Режим «Стекло» с палитрой palette (GlassScene.palette); null — обратно к видео. */
-    void setScene(float[] palette) {
+    /**
+     * Режим «Сцена»: сцена id (ScenePresets.*) с палитрой palette (GlassScene.palette);
+     * palette null — обратно к видео.
+     */
+    void setScene(int id, float[] palette) {
         float[] copy = palette == null ? null : palette.clone();
         handler.post(() -> {
-            if (Arrays.equals(scenePalette, copy)) return;
+            if (id == sceneId && Arrays.equals(scenePalette, copy)) return;
+            if (id != sceneId) {
+                // Другая сцена — свой шейдер; прежний освобождаем.
+                if (scene != null && egl != null) scene.release();
+                scene = null;
+                sceneId = id;
+            }
             scenePalette = copy;
             draw();
         });
@@ -364,7 +375,8 @@ final class WallpaperRenderer {
             if (source == null) return;
             if (scene == null) {
                 try {
-                    scene = new GlassScene();
+                    scene = sceneId == ScenePresets.ORIGINAL ? new GlassScene()
+                            : new ProceduralScene(ScenePresets.get(sceneId));
                 } catch (java.io.IOException e) {
                     Log.w(TAG, "scene shader failed", e);
                     ErrorListener listener = errorListener;
