@@ -16,6 +16,7 @@ import android.hardware.SensorManager;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.os.SystemClock;
@@ -53,6 +54,20 @@ public class VideoWallpaperService extends WallpaperService {
     private static final float PARALLAX_SMOOTHING = 0.25f;
 
     private static int engineCount;
+    private static Handler probeHandler;
+
+    /**
+     * Поток опроса лаунчера: во время анимации закрытия приложения ответ лаунчера идёт до
+     * секунды — главный поток обоев ждать его не должен.
+     */
+    private static synchronized Handler probeHandler() {
+        if (probeHandler == null) {
+            HandlerThread thread = new HandlerThread("launcher-probe");
+            thread.start();
+            probeHandler = new Handler(thread.getLooper());
+        }
+        return probeHandler;
+    }
 
     @Override
     public Engine onCreateEngine() {
@@ -163,30 +178,43 @@ public class VideoWallpaperService extends WallpaperService {
          * рабочего стола) — пауза. События лаунчера приходят только после анимации, опрос
          * видит его раньше.
          */
+        /** Номер текущего наблюдения — ответы от прошлых не применяем. */
+        private int probeGen;
         private final Runnable probeLoop = new Runnable() {
             @Override
             public void run() {
                 RecentsDetectorService detector = RecentsDetectorService.instance;
                 if (!recentsWatch || !visible || detector == null) return;
-                long now = SystemClock.uptimeMillis();
-                int seen = detector.probe();
-                if (seen == LauncherState.HOME) {
-                    recentsWatch = false;
-                    log("рабочий стол через " + (now - visibleSince) + "мс");
-                    return;
-                }
-                if (seen == LauncherState.RECENTS || seen == LauncherState.OTHER) {
-                    pauseForRecents("через " + (now - visibleSince) + "мс, признак «"
-                            + detector.lastMarker + "»");
-                    return;
-                }
-                if (now - visibleSince < HOME_PROBE_LIMIT_MS) {
-                    handler.postDelayed(this, HOME_PROBE_MS);
-                } else {
-                    recentsWatch = false;
-                }
+                int gen = probeGen;
+                long started = SystemClock.uptimeMillis();
+                probeHandler().post(() -> {
+                    int seen = detector.probe();
+                    String marker = detector.lastMarker;
+                    long took = SystemClock.uptimeMillis() - started;
+                    handler.post(() -> onProbe(gen, seen, marker, took));
+                });
             }
         };
+
+        private void onProbe(int gen, int seen, String marker, long took) {
+            if (gen != probeGen || !recentsWatch || !visible) return;
+            long now = SystemClock.uptimeMillis();
+            String when = (now - visibleSince) + "мс (опрос " + took + "мс)";
+            if (seen == LauncherState.HOME) {
+                recentsWatch = false;
+                log("рабочий стол через " + when);
+                return;
+            }
+            if (seen == LauncherState.RECENTS || seen == LauncherState.OTHER) {
+                pauseForRecents("через " + when + ", признак «" + marker + "»");
+                return;
+            }
+            if (now - visibleSince < HOME_PROBE_LIMIT_MS) {
+                handler.postDelayed(probeLoop, HOME_PROBE_MS);
+            } else {
+                recentsWatch = false;
+            }
+        }
 
         /** Цвета обоев для системы (часы, палитра) — по неподвижному кадру. */
         private volatile WallpaperColors colors;
@@ -396,18 +424,26 @@ public class VideoWallpaperService extends WallpaperService {
                 }
                 return;
             }
+            if (unlocked && !isPreview() && keyguard.isKeyguardLocked() && !unlockedNow()) {
+                // Экран блокировки снова на месте (например, вышли из его редактора, куда
+                // входили с разблокировкой): видео снова ждёт разблокировки.
+                log("экран блокировки снова показан — ждём разблокировки");
+                unlocked = false;
+                keyguardGone = false;
+            }
             boolean backFromApp = hiddenByApp;
             hiddenByApp = false;
             watchUnlock();
             setGyroscope(cfg.parallax > 0);
             // Появился экран блокировки — масштаб плавно возвращается к его состоянию.
             if (!unlocked) animateUnlockZoom(lockScale(), lockZoomDuration());
-            if (backFromApp && cfg.startOnHome && !isPreview()) {
+            if (backFromApp && unlocked && cfg.startOnHome && !isPreview()) {
                 // Старт сразу, как только приложение начало закрываться. Если служба видит
                 // экран лаунчера — следим, не список ли это недавних (тогда пауза).
                 startFromHome();
                 if (!cfg.startInRecents && LauncherState.serviceRunning()) {
                     recentsWatch = true;
+                    probeGen++;
                     visibleSince = SystemClock.uptimeMillis();
                     handler.removeCallbacks(probeLoop);
                     handler.postDelayed(probeLoop, HOME_PROBE_MS);
@@ -620,20 +656,14 @@ public class VideoWallpaperService extends WallpaperService {
         @Override
         public void onSharedPreferenceChanged(SharedPreferences prefs, String key) {
             if (isPreview()) {
-                // Превью: кадр, масштаб и видео по новым настройкам; новое видео — с начала.
+                // Превью — неподвижный кадр: обновляем его и масштаб.
                 if (Prefs.KEY_REVISION.equals(key) || Prefs.KEY_PLAY_NOW.equals(key)) {
-                    if (Prefs.KEY_PLAY_NOW.equals(key)) {
-                        closePlayers();
-                        positionMs = 0;
-                    }
                     loadConfig();
                     cancelUnlockZoom();
                     unlockScale = previewScale();
                     setGyroscope(visible && cfg.parallax > 0);
                     applyTransform();
                     loadStill(true);
-                    if (forward == null) openPlayers();
-                    resume();
                 }
                 return;
             }
@@ -690,15 +720,15 @@ public class VideoWallpaperService extends WallpaperService {
         }
 
         /**
-         * Неподвижный кадр в фоне: виден до первого кадра плеера (show) — в превью всегда,
-         * у обоев — если видео стоит в начале или в конце.
+         * Неподвижный кадр в фоне: в превью он и есть изображение, у обоев — виден до первого
+         * кадра плеера (show), если видео стоит в начале или в конце.
          * По кадру покоя считаются цвета обоев для системы.
          */
         private void loadStill(boolean show) {
             WallpaperRenderer target = renderer;
             boolean restEnd = restAtEnd();
-            // Показываем кадр, с которого пойдёт видео (в превью — с начала).
-            boolean showEnd = positionMs == AT_END;
+            // Превью — кадр покоя; обои — кадр, с которого пойдёт видео.
+            boolean showEnd = isPreview() ? restEnd : positionMs == AT_END;
             boolean visibleStill = show && target != null
                     && (isPreview() || positionMs == 0 || positionMs == AT_END);
             int width = surfaceWidth;
@@ -1071,16 +1101,14 @@ public class VideoWallpaperService extends WallpaperService {
         // ---- Плееры ----
 
         private void openPlayers() {
-            if (renderer == null || forward != null) return;
+            // Превью — только неподвижный кадр: декодеры видео не занимаем, батарею не тратим.
+            if (isPreview() || renderer == null || forward != null) return;
             Context context = VideoWallpaperService.this;
             File video = Prefs.videoFile(context);
             if (!video.isFile()) return;
-            // Превью: видео по кругу и без звука поверх неподвижного кадра; если декодера
-            // не хватит (настоящие обои держат свои), останется кадр.
-            forward = createPlayer(video, WallpaperRenderer.SOURCE_FORWARD,
-                    cfg.sound && !isPreview());
+            forward = createPlayer(video, WallpaperRenderer.SOURCE_FORWARD, cfg.sound);
             if (forward != null) {
-                forward.setLooping(cfg.infinite() || isPreview());
+                forward.setLooping(cfg.infinite());
                 forward.setOnPreparedListener(mp -> {
                     if (mp != forward) return;
                     forwardReady = true;
@@ -1095,7 +1123,7 @@ public class VideoWallpaperService extends WallpaperService {
                 forward.setOnCompletionListener(this::onForwardCompleted);
                 forward.prepareAsync();
             }
-            if (reverseAvailable && !isPreview()) {
+            if (reverseAvailable) {
                 backward = createPlayer(Prefs.reverseFile(context),
                         WallpaperRenderer.SOURCE_REVERSE, false);
                 if (backward != null) {
