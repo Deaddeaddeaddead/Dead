@@ -347,6 +347,7 @@ public class VideoWallpaperService extends WallpaperService {
             // Таблица света стекла — 128 КБ из assets и шейдеры сцен, один раз на процесс.
             GlassScene.load(context);
             ProceduralScene.load(context);
+            LightScene.load(context);
 
             IntentFilter filter = new IntentFilter();
             filter.addAction(Intent.ACTION_SCREEN_OFF);

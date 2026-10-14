@@ -105,6 +105,7 @@ public class MainActivity extends Activity {
     private int glassTintBottom;
     private int glassBrightness;
     private LinearLayout customColors;
+    private Segmented paletteSegment;
     private SeekBar brightnessBar;
     private int glassDurationMs;
     /** Живое превью сцены в приложении. */
@@ -139,6 +140,7 @@ public class MainActivity extends Activity {
         sp = Prefs.prefs(this);
         GlassScene.load(this);
         ProceduralScene.load(this);
+        LightScene.load(this);
         //noinspection ResultOfMethodCallIgnored
         Prefs.legacyReverseFile(this).delete();
         Prefs cfg = Prefs.load(this);
@@ -237,22 +239,19 @@ public class MainActivity extends Activity {
         glassParams.setMargins(dp(16), dp(16), dp(16), dp(16));
         glassIsland.addView(glassFrame, glassParams);
         sceneChips(glassIsland);
-        new Segmented(glassIsland, "Цвет",
+        paletteSegment = new Segmented(glassIsland, "Цвет",
                 new String[] {"Янтарь", "Лёд", "Аметист", "Изумруд", "Свой"}, glassPalette,
                 index -> {
                     glassPalette = index;
                     sp.edit().putInt(Prefs.KEY_GLASS_PALETTE, index).apply();
                     Prefs.bumpRevision(this);
-                    customColors.setVisibility(index == GlassScene.PALETTE_CUSTOM
-                            ? View.VISIBLE : View.GONE);
+                    updateColorControls();
                     previewPalette();
                 });
         // Свои цвета: видны, только когда выбран «Свой». У каждой части сцены — свой цвет,
         // нажатие открывает пикер.
         customColors = vertical();
         glassIsland.addView(customColors);
-        customColors.setVisibility(glassPalette == GlassScene.PALETTE_CUSTOM
-                ? View.VISIBLE : View.GONE);
         for (int i = 0; i < COLOR_ORDER.length; i++) {
             int slot = COLOR_ORDER[i];
             String title = COLOR_TITLES[i];
@@ -276,6 +275,7 @@ public class MainActivity extends Activity {
                     previewPalette();
                 }));
         updateBrightnessTrack();
+        updateColorControls();
         sliderRow(glassIsland, "Длительность анимации", null, Prefs.MIN_GLASS_DURATION,
                 Prefs.MAX_GLASS_DURATION, glassDurationMs / 100,
                 value -> String.format(java.util.Locale.ROOT, "%.1f с", value / 10f),
@@ -623,6 +623,7 @@ public class MainActivity extends Activity {
                 if (scene == id) return;
                 scene = id;
                 styleChips(chips);
+                updateColorControls();
                 sp.edit().putInt(Prefs.KEY_SCENE, id).apply();
                 Prefs.bumpRevision(this);
                 previewPalette();
@@ -653,6 +654,17 @@ public class MainActivity extends Activity {
             chips[i].setBackgroundResource(on ? R.drawable.segment_selected : R.drawable.segment_bg);
             chips[i].setTextColor(getColor(on ? R.color.on_accent : R.color.text));
         }
+    }
+
+    /**
+     * Цвета видны только у сцен, которые их берут (у «Света» цвета как в ролике); свои цвета —
+     * когда выбран «Свой».
+     */
+    private void updateColorControls() {
+        boolean colored = ScenePresets.colored(scene);
+        paletteSegment.item.setVisibility(colored ? View.VISIBLE : View.GONE);
+        customColors.setVisibility(colored && glassPalette == GlassScene.PALETTE_CUSTOM
+                ? View.VISIBLE : View.GONE);
     }
 
     /** Текущая палитра стекла — в превью. */
