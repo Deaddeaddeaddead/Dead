@@ -4,7 +4,6 @@ import android.app.KeyguardManager;
 import android.app.WallpaperColors;
 import android.app.WallpaperManager;
 import android.app.wallpaper.WallpaperDescription;
-import android.content.ComponentName;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -803,7 +802,6 @@ public class VideoWallpaperService extends WallpaperService {
             Uri thumbnail = StillProvider.uri(context);
             log("система сохраняет обои (флаги " + which + ") — передаём миниатюру");
             return new WallpaperDescription.Builder()
-                    .setComponent(new ComponentName(context, VideoWallpaperService.class))
                     .setThumbnail(thumbnail)
                     .setTitle(getString(R.string.wallpaper_name))
                     .build();
