@@ -24,7 +24,7 @@ final class GlassScene {
     static final int PALETTE_EMERALD = 3;
     /** Оттенки: фон, свечение внутри стекла, ореол, подсветка углов фона. */
     private static final float[][] PALETTES = {
-            {1.0f, 0.34f, 0.14f, 1.0f, 0.28f, 0.115f, 1.0f, 0.52f, 0.17f, 1.0f, 0.24f, 0.05f},
+            {1.0f, 0.34f, 0.14f, 1.0f, 0.29f, 0.085f, 1.0f, 0.52f, 0.17f, 1.0f, 0.24f, 0.05f},
             {0.22f, 0.42f, 1.0f, 0.12f, 0.38f, 1.0f, 0.45f, 0.8f, 1.0f, 0.12f, 0.3f, 1.0f},
             {0.55f, 0.22f, 1.0f, 0.62f, 0.16f, 1.0f, 0.9f, 0.55f, 1.0f, 0.6f, 0.12f, 1.0f},
             {0.12f, 0.7f, 0.4f, 0.1f, 1.0f, 0.42f, 0.55f, 1.0f, 0.6f, 0.08f, 0.7f, 0.3f},
@@ -73,11 +73,6 @@ final class GlassScene {
             + "  return uPal[0] * 0.11 + uPal[3] * 0.3 * corner;\n"
             + "}\n"
             + "\n"
-            + "// Свет «горячего» цвета: чем ярче, тем ближе к цвету ореола.\n"
-            + "vec3 hot(float i) {\n"
-            + "  return i * mix(uPal[1], uPal[2], smoothstep(0.8, 2.6, i));\n"
-            + "}\n"
-            + "\n"
             + "// Задний слой: фон, ореол вокруг светящейся капсулы и она сама. haloGain и emberGain —\n"
             + "// как стекло перед ними меняет ореол и свечение.\n"
             + "vec3 back(vec2 p, float pxw, float haloGain, float emberGain) {\n"
@@ -92,11 +87,19 @@ final class GlassScene {
             + "    float halo = glow * amp * exp(-d / width) * smoothstep(0.0, 0.012, d);\n"
             + "    return background(p) + uPal[2] * halo * haloGain;\n"
             + "  }\n"
+            + "  // Светящаяся капсула — как световод: свет входит с торцов и бежит вдоль краёв. Вдоль\n"
+            + "  // верхнего левого края он сильнее у нижнего торца, вдоль нижнего правого — у верхнего.\n"
             + "  float s = -d;\n"
-            + "  float ul = clamp(0.5 + 0.5 * dot(n, UL), 0.0, 1.0);\n"
-            + "  float tip = HALF_LEN + RADIUS - abs(dot(p - MID, AXIS));\n"
-            + "  float ember = 0.27 + glow * (mix(1.1, 2.0, ul) * exp(-s / 0.043) + 2.6 * exp(-max(tip, 0.0) / 0.08));\n"
-            + "  return hot(ember * emberGain) * (1.0 - 0.6 * exp(-s / (pxw * 2.0)));\n"
+            + "  vec2 rel = p - MID;\n"
+            + "  float a = dot(rel, AXIS) / (HALF_LEN + RADIUS);\n"
+            + "  float u = dot(rel, UL) / RADIUS;\n"
+            + "  float sideUL = 5.0 * smoothstep(0.3, -0.5, a);\n"
+            + "  float sideLR = 5.0 * smoothstep(-0.3, 0.5, a);\n"
+            + "  float edge = 0.6 + mix(sideLR, sideUL, smoothstep(-0.3, 0.3, u));\n"
+            + "  float tip = HALF_LEN + RADIUS - abs(dot(rel, AXIS));\n"
+            + "  float ember = 0.27 + glow * (edge * exp(-s / 0.065) + 3.5 * exp(-max(tip, 0.0) / 0.085));\n"
+            + "  // Внутри — один оттенок свечения; желтеет только самое яркое (насыщение).\n"
+            + "  return uPal[1] * ember * emberGain * (1.0 - 0.6 * exp(-s / (pxw * 2.0)));\n"
             + "}\n"
             + "\n"
             + "void main() {\n"
