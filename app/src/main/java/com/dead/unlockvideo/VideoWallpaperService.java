@@ -188,13 +188,9 @@ public class VideoWallpaperService extends WallpaperService {
         private long visibleSince;
         private long lastHomeStart;
         // Опрос экрана лаунчера, пока ждём рабочего стола.
-        private long launcherSeenAt;
-        private long homeSeenAt;
-        private String firstSignature;
         /**
-         * Пока ждём рабочего стола, опрашиваем экран лаунчера и пишем в журнал, какие элементы
-         * видны в начале жеста, в списке недавних и на рабочем столе. Решение о запуске
-         * по-прежнему принимает служба по событиям лаунчера.
+         * Пока ждём рабочего стола, опрашиваем экран лаунчера раз в HOME_PROBE_MS — так
+         * рабочий стол виден сразу, не дожидаясь событий лаунчера.
          */
         private final Runnable probeLoop = new Runnable() {
             @Override
@@ -202,18 +198,12 @@ public class VideoWallpaperService extends WallpaperService {
                 RecentsDetectorService detector = RecentsDetectorService.instance;
                 if (!pendingHome || !visible || detector == null) return;
                 long now = SystemClock.uptimeMillis();
-                int seen = detector.probe();
-                if (seen != LauncherState.UNKNOWN && launcherSeenAt == 0) {
-                    launcherSeenAt = now;
-                    firstSignature = detector.lastProbeSignature;
-                    log("опрос: лаунчер виден через " + (now - visibleSince)
-                            + "мс; элементы: " + firstSignature);
-                }
-                if (seen == LauncherState.RECENTS && homeSeenAt == 0) {
-                    homeSeenAt = now; // здесь — «список недавних уже записан»
-                    log("опрос: список недавних через " + (now - launcherSeenAt)
-                            + "мс после появления лаунчера; элементы: "
-                            + detector.lastProbeSignature);
+                if (detector.probe() == LauncherState.HOME) {
+                    pendingHome = false;
+                    log("рабочий стол через " + (now - visibleSince) + "мс (признак «"
+                            + detector.lastMarker + "»)");
+                    startFromHome();
+                    return;
                 }
                 if (now - visibleSince < 5000) handler.postDelayed(this, HOME_PROBE_MS);
             }
@@ -428,9 +418,6 @@ public class VideoWallpaperService extends WallpaperService {
                 // при лёгком сворачивании лаунчер вообще не показывается).
                 pendingHome = true;
                 visibleSince = SystemClock.uptimeMillis();
-                launcherSeenAt = 0;
-                homeSeenAt = 0;
-                firstSignature = null;
                 log("ждём рабочего стола");
                 handler.removeCallbacks(probeLoop);
                 handler.post(probeLoop);
@@ -455,10 +442,6 @@ public class VideoWallpaperService extends WallpaperService {
          */
         private void startFromHome() {
             preparedForHome = false;
-            RecentsDetectorService detector = RecentsDetectorService.instance;
-            if (detector != null && detector.probe() == LauncherState.HOME) {
-                log("опрос: рабочий стол, элементы: " + detector.lastProbeSignature);
-            }
             long now = SystemClock.uptimeMillis();
             if (phase == PHASE_PLAYING && now - lastHomeStart < 1500) {
                 log("возврат на рабочий стол: видео уже идёт, продолжаем");

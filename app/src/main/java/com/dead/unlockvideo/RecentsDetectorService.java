@@ -23,7 +23,13 @@ public class RecentsDetectorService extends AccessibilityService {
             "закрыть все", "закрыть всё", "очистить все", "очистить всё",
             "нет недавних", "close all", "clear all", "no recent"
     };
-    private static final int MAX_NODES = 400;
+    private static final int MAX_NODES = 600;
+    private static final java.util.Set<String> RECENTS_IDS = new java.util.HashSet<>(
+            java.util.Arrays.asList("recentContainer", "recents_activity_root_view",
+                    "taskListContainer", "taskView", "clear_all", "clearAllContainer"));
+    private static final java.util.Set<String> HOME_IDS = new java.util.HashSet<>(
+            java.util.Arrays.asList("home_screen", "hotseat_container", "workspace_pot_view"));
+    String lastMarker;
     private static final long CONTENT_THROTTLE_MS = 120;
     /**
      * Сколько ждать, что признаки списка недавних не появятся, прежде чем решить «рабочий
@@ -35,7 +41,7 @@ public class RecentsDetectorService extends AccessibilityService {
             new android.os.Handler(android.os.Looper.getMainLooper());
     private long homeCandidateAt;
     private boolean checkPosted;
-    private String lastHomeSignature = "";
+
 
     private String launcherPackage;
     private long lastContentCheck;
@@ -61,15 +67,11 @@ public class RecentsDetectorService extends AccessibilityService {
                     || !launcherPackage.contentEquals(root.getPackageName())) {
                 continue;
             }
-            lastProbeMarker = findRecentsMarker(root);
-            lastProbeSignature = signature(root);
-            return lastProbeMarker != null ? LauncherState.RECENTS : LauncherState.HOME;
+            return classify(root);
         }
         return LauncherState.UNKNOWN;
     }
 
-    String lastProbeMarker;
-    String lastProbeSignature = "";
 
     @Override
     protected void onServiceConnected() {
@@ -133,15 +135,13 @@ public class RecentsDetectorService extends AccessibilityService {
                 || !launcherPackage.contentEquals(root.getPackageName())) {
             return;
         }
-        String marker = findRecentsMarker(root);
-        if (marker != null) {
-            EventLog.add(this, "спец. возможности: был не рабочий стол, а начало списка "
-                    + "недавних; элементы в начале: " + lastHomeSignature);
-            set(LauncherState.RECENTS, "признак «" + marker + "»");
+        int seen = classify(root);
+        if (seen == LauncherState.RECENTS) {
+            set(LauncherState.RECENTS, "признак «" + lastMarker + "»");
             return;
         }
-        set(LauncherState.HOME, "признаков списка нет "
-                + (SystemClock.uptimeMillis() - candidate) + "мс");
+        set(LauncherState.HOME, seen == LauncherState.HOME ? "признак «" + lastMarker + "»"
+                : "признаков списка нет " + (SystemClock.uptimeMillis() - candidate) + "мс");
     };
 
     private final Runnable check = () -> {
@@ -152,42 +152,19 @@ public class RecentsDetectorService extends AccessibilityService {
                 || !launcherPackage.contentEquals(root.getPackageName())) {
             return;
         }
-        String marker = findRecentsMarker(root);
-        if (marker != null) {
-            // Список недавних — сразу; кандидат в «рабочий стол» отменяется.
+        int seen = classify(root);
+        if (seen != LauncherState.UNKNOWN) {
+            // Явный признак — сразу; запасная проверка не нужна.
             homeCandidateAt = 0;
             handler.removeCallbacks(confirmHome);
-            set(LauncherState.RECENTS, "признак «" + marker + "»");
+            set(seen, "признак «" + lastMarker + "»");
         } else if (homeCandidateAt == 0) {
-            // Похоже на рабочий стол, но в начале открытия списка недавних его признаков
-            // ещё нет — подтверждаем, только если они так и не появятся.
+            // Признаков нет (например, список всех приложений) — считаем рабочим столом,
+            // только если признаки списка недавних так и не появятся.
             homeCandidateAt = lastContentCheck;
-            lastHomeSignature = signature(root);
             handler.postDelayed(confirmHome, HOME_CONFIRM_MS);
         }
     };
-
-    /** Несколько идентификаторов элементов — чтобы найти ранние признаки списка недавних. */
-    private static String signature(AccessibilityNodeInfo root) {
-        java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
-        ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
-        queue.add(root);
-        int visited = 0;
-        while (!queue.isEmpty() && visited < MAX_NODES && ids.size() < 40) {
-            AccessibilityNodeInfo node = queue.poll();
-            visited++;
-            String id = node.getViewIdResourceName();
-            // «+» — элемент виден на экране, «-» — есть в дереве, но не виден.
-            if (id != null) {
-                ids.add(id.substring(id.indexOf('/') + 1) + (node.isVisibleToUser() ? "+" : "-"));
-            }
-            for (int i = 0; i < node.getChildCount(); i++) {
-                AccessibilityNodeInfo child = node.getChild(i);
-                if (child != null) queue.add(child);
-            }
-        }
-        return ids.toString();
-    }
 
     @Override
     public void onInterrupt() {
@@ -201,22 +178,38 @@ public class RecentsDetectorService extends AccessibilityService {
         LauncherState.set(state);
     }
 
-    /** Ищет на экране лаунчера кнопку «Закрыть все» и т.п.; null — не нашлось. */
-    private String findRecentsMarker(AccessibilityNodeInfo root) {
+    /**
+     * Что на экране лаунчера — по видимым элементам (One UI 9, проверено по журналу):
+     * список недавних — recentContainer / clear_all / taskView; рабочий стол — home_screen /
+     * hotseat_container (в начале открытия списка недавних они есть, но скрыты).
+     * UNKNOWN — лаунчер виден, но признаков ещё нет. Найденный признак — в lastMarker.
+     */
+    private int classify(AccessibilityNodeInfo root) {
         ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
         int visited = 0;
+        String homeMarker = null;
         while (!queue.isEmpty() && visited < MAX_NODES) {
             AccessibilityNodeInfo node = queue.poll();
             visited++;
-            String id = node.getViewIdResourceName();
-            if (id != null && id.toLowerCase(Locale.ROOT).contains("clear_all")) {
-                return id;
-            }
-            String text = textOf(node);
-            if (text != null) {
-                for (String marker : RECENTS_TEXTS) {
-                    if (text.contains(marker)) return marker;
+            if (node.isVisibleToUser()) {
+                String id = node.getViewIdResourceName();
+                if (id != null) {
+                    String name = id.substring(id.indexOf('/') + 1);
+                    if (RECENTS_IDS.contains(name)) {
+                        lastMarker = name;
+                        return LauncherState.RECENTS;
+                    }
+                    if (homeMarker == null && HOME_IDS.contains(name)) homeMarker = name;
+                }
+                String text = textOf(node);
+                if (text != null) {
+                    for (String marker : RECENTS_TEXTS) {
+                        if (text.contains(marker)) {
+                            lastMarker = marker;
+                            return LauncherState.RECENTS;
+                        }
+                    }
                 }
             }
             for (int i = 0; i < node.getChildCount(); i++) {
@@ -224,7 +217,8 @@ public class RecentsDetectorService extends AccessibilityService {
                 if (child != null) queue.add(child);
             }
         }
-        return null;
+        lastMarker = homeMarker;
+        return homeMarker != null ? LauncherState.HOME : LauncherState.UNKNOWN;
     }
 
     private static String textOf(AccessibilityNodeInfo node) {
