@@ -15,19 +15,23 @@ final class Easing {
      */
     static final float SCENE_RAMP = 0.6f;
 
-    /** Вся длительность анимации сцены: основное движение плюс разгон и торможение. */
-    static int sceneDuration(int durationMs) {
-        return Math.round(durationMs * (1f + SCENE_RAMP));
+    /**
+     * Вся длительность анимации сцены: основное движение плюс, если сглаживание включено,
+     * разгон и торможение.
+     */
+    static int sceneDuration(int durationMs, boolean smooth) {
+        return smooth ? Math.round(durationMs * (1f + SCENE_RAMP)) : durationMs;
     }
 
     /**
-     * Ход сцены 0..1 в момент t (0..1 всей длительности, см. sceneDuration). Посередине —
-     * исходная скорость; в начале скорость плавно (smootherstep) растёт от нуля, в конце так
-     * же спадает до нуля.
+     * Ход сцены 0..1 в момент t (0..1 всей длительности, см. sceneDuration). Со сглаживанием
+     * посередине — исходная скорость; в начале скорость плавно (smootherstep) растёт от нуля,
+     * в конце так же спадает до нуля. Без сглаживания — равномерно.
      */
-    static float scene(float t) {
+    static float scene(float t, boolean smooth) {
         if (t <= 0f) return 0f;
         if (t >= 1f) return 1f;
+        if (!smooth) return t;
         // Время — в долях основной длительности.
         float total = 1f + SCENE_RAMP;
         float x = t * total;
@@ -41,11 +45,11 @@ final class Easing {
      * 1; результат — доля пути этого участка (0..1). Масштаб «как у видео» по нему идёт в такт
      * сцене, даже если начался не с начала анимации.
      */
-    static float sceneSegment(float t, float a, float b) {
-        float from = scene(a);
-        float span = scene(b) - from;
+    static float sceneSegment(float t, float a, float b, boolean smooth) {
+        float from = scene(a, smooth);
+        float span = scene(b, smooth) - from;
         if (Math.abs(span) < 1e-4f) return Math.max(0f, Math.min(1f, t));
-        return (scene(a + (b - a) * Math.max(0f, Math.min(1f, t))) - from) / span;
+        return (scene(a + (b - a) * Math.max(0f, Math.min(1f, t)), smooth) - from) / span;
     }
 
     /**

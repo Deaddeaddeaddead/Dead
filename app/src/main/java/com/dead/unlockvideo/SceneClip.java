@@ -7,7 +7,7 @@ import android.os.SystemClock;
 /**
  * Анимация, нарисованная кодом: время идёт по часам, и назад она играет так же, как вперёд
  * (reversed — позиция p показывает кадр duration − p). Ход — с мягким стартом и остановкой
- * (Easing), обратный ход — его точное зеркало. Управляется с главного потока,
+ * (Easing), если включено; обратный ход — его точное зеркало. Управляется с главного потока,
  * а кадр (progress) читает поток рендера.
  */
 final class SceneClip extends Clip implements WallpaperRenderer.SceneSource {
@@ -27,15 +27,18 @@ final class SceneClip extends Clip implements WallpaperRenderer.SceneSource {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final int duration;
     private final boolean reversed;
+    /** Плавный старт и остановка (Easing.scene). */
+    private final boolean smooth;
     private volatile State state = new State(0, 0, false);
     private volatile boolean looping;
     /** Позицию сменили — рендеру нужен новый кадр. */
     private Runnable onChange;
     private final Runnable finish = this::onReachedEnd;
 
-    SceneClip(int durationMs, boolean reversed) {
+    SceneClip(int durationMs, boolean reversed, boolean smooth) {
         duration = Math.max(1, durationMs);
         this.reversed = reversed;
+        this.smooth = smooth;
     }
 
     void setOnChange(Runnable onChange) {
@@ -145,7 +148,7 @@ final class SceneClip extends Clip implements WallpaperRenderer.SceneSource {
         float t = positionOf(state, SystemClock.uptimeMillis()) / (float) duration;
         // Обратный ход — та же кривая от конца: кадр в позиции p тот же, что у прямого хода
         // в позиции duration − p.
-        return Easing.scene(reversed ? 1f - t : t);
+        return Easing.scene(reversed ? 1f - t : t, smooth);
     }
 
     @Override

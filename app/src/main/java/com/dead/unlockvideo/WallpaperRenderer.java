@@ -52,7 +52,7 @@ final class WallpaperRenderer {
     private volatile float zoom;
     private volatile float shiftX;
     private volatile float shiftY;
-    private volatile ScaleAnimation scale = new ScaleAnimation(1f, 1f, 0, 0, 0f, 0f);
+    private volatile ScaleAnimation scale = new ScaleAnimation(1f, 1f, 0, 0, 0f, 0f, false);
     /** Масштаб этого кадра — считается в начале draw. */
     private float frameZoom = 1f;
     private final AtomicBoolean drawPosted = new AtomicBoolean();
@@ -77,15 +77,18 @@ final class WallpaperRenderer {
         final int duration;
         final float sceneFrom;
         final float sceneTo;
+        /** Сглаживание анимации сцены (Easing.scene). */
+        final boolean smooth;
 
         ScaleAnimation(float from, float to, long start, int duration, float sceneFrom,
-                float sceneTo) {
+                float sceneTo, boolean smooth) {
             this.from = from;
             this.to = to;
             this.start = start;
             this.duration = duration;
             this.sceneFrom = sceneFrom;
             this.sceneTo = sceneTo;
+            this.smooth = smooth;
         }
 
         float at(long now) {
@@ -94,7 +97,7 @@ final class WallpaperRenderer {
         }
 
         float eased(float t) {
-            return sceneFrom != sceneTo ? Easing.sceneSegment(t, sceneFrom, sceneTo)
+            return sceneFrom != sceneTo ? Easing.sceneSegment(t, sceneFrom, sceneTo, smooth)
                     : Easing.soft(t, Easing.ZOOM_RAMP);
         }
 
@@ -105,7 +108,7 @@ final class WallpaperRenderer {
         boolean same(ScaleAnimation other) {
             return from == other.from && to == other.to && start == other.start
                     && duration == other.duration && sceneFrom == other.sceneFrom
-                    && sceneTo == other.sceneTo;
+                    && sceneTo == other.sceneTo && smooth == other.smooth;
         }
     }
     private int pending = -1;
@@ -302,7 +305,7 @@ final class WallpaperRenderer {
 
     /** Масштаб от разблокировки — сразу value. */
     void setScale(float value) {
-        animateScale(new ScaleAnimation(value, value, 0, 0, 0f, 0f));
+        animateScale(new ScaleAnimation(value, value, 0, 0, 0f, 0f, false));
     }
 
     /**

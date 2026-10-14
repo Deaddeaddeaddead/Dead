@@ -55,6 +55,8 @@ final class Prefs {
     static final int MIN_GLASS_BRIGHTNESS = 50;
     static final int MAX_GLASS_BRIGHTNESS = 150;
     static final String KEY_GLASS_DURATION = "glass_duration";
+    /** Плавный старт и остановка анимации сцены (Easing.scene). */
+    static final String KEY_SCENE_SMOOTH = "scene_smooth";
     /** Цвет сцен «Ленты» и «Квадраты»: LightColors.PALETTE_*. */
     static final String KEY_LIGHT_PALETTE = "light_palette";
     /** Свои цвета «Лент» и «Квадратов» (ARGB): вместо светло-бирюзового и синего. */
@@ -158,8 +160,10 @@ final class Prefs {
     final int glassTintBottom;
     /** Общая яркость своих цветов, %. */
     final int glassBrightness;
-    /** Длительность анимации стекла, мс. */
+    /** Длительность анимации стекла, мс (без разгона и торможения). */
     final int glassDurationMs;
+    /** Плавный старт и остановка анимации сцены. */
+    final boolean sceneSmooth;
     /** «Ленты» и «Квадраты»: цвет (LightColors.PALETTE_*), свои цвета, их яркость, %. */
     final int lightPalette;
     final int[] lightColors;
@@ -224,6 +228,7 @@ final class Prefs {
                 sp.getInt(KEY_GLASS_BRIGHTNESS, 100)));
         glassDurationMs = 100 * Math.max(MIN_GLASS_DURATION, Math.min(MAX_GLASS_DURATION,
                 sp.getInt(KEY_GLASS_DURATION, 20)));
+        sceneSmooth = sp.getBoolean(KEY_SCENE_SMOOTH, true);
         lightPalette = Math.max(0, Math.min(LightColors.PALETTE_CUSTOM, sp.getInt(KEY_LIGHT_PALETTE,
                 oldViolet ? LightColors.PALETTE_VIOLET : LightColors.PALETTE_TEAL)));
         lightColors = new int[KEY_LIGHT_COLORS.length];

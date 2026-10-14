@@ -695,7 +695,8 @@ public class VideoWallpaperService extends WallpaperService {
                 Prefs next = Prefs.load(VideoWallpaperService.this);
                 boolean sourceChanged = next.source != cfg.source;
                 if (sourceChanged || reverseFor(next) != reverseAvailable
-                        || (next.glass() && next.glassDurationMs != cfg.glassDurationMs)) {
+                        || (next.glass() && (next.glassDurationMs != cfg.glassDurationMs
+                                || next.sceneSmooth != cfg.sceneSmooth))) {
                     closePlayers();
                 }
                 if (sourceChanged) {
@@ -846,7 +847,8 @@ public class VideoWallpaperService extends WallpaperService {
             glass = cfg.glass();
             reverseAvailable = reverseFor(cfg);
             // Позиция r назад = lastFrameMs − r вперёд; у сцены назад та же длительность.
-            lastFrameMs = glass ? Easing.sceneDuration(cfg.glassDurationMs) : cfg.reverseLastMs;
+            lastFrameMs = glass ? Easing.sceneDuration(cfg.glassDurationMs, cfg.sceneSmooth)
+                    : cfg.reverseLastMs;
             finishedForever = !isPreview() && cfg.once && cfg.finished;
         }
 
@@ -963,7 +965,7 @@ public class VideoWallpaperService extends WallpaperService {
             zoomStart = SystemClock.uptimeMillis();
             zoomDuration = durationMs;
             zoomAnimation = new WallpaperRenderer.ScaleAnimation(zoomFrom, zoomTo, zoomStart,
-                    durationMs, sceneFrom, sceneTo);
+                    durationMs, sceneFrom, sceneTo, cfg.sceneSmooth);
             tiltToCenter = tiltMoved;
             tiltFromX = tiltX;
             tiltFromY = tiltY;
@@ -1267,7 +1269,8 @@ public class VideoWallpaperService extends WallpaperService {
 
         /** Часы сцены «Стекло» для источника; рендер рисует по ним кадры. */
         private Clip sceneClip(boolean reversed, int source) {
-            SceneClip clip = new SceneClip(Easing.sceneDuration(cfg.glassDurationMs), reversed);
+            SceneClip clip = new SceneClip(Easing.sceneDuration(cfg.glassDurationMs,
+                    cfg.sceneSmooth), reversed, cfg.sceneSmooth);
             clip.setOnChange(() -> {
                 if (renderer != null) renderer.requestSceneFrame();
             });

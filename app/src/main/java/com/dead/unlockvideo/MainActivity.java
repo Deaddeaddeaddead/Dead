@@ -133,6 +133,9 @@ public class MainActivity extends Activity {
     private final View[] squareSwatches = new View[2];
     private SeekBar brightnessBar;
     private int glassDurationMs;
+    /** Плавный старт и остановка анимации сцены. */
+    private boolean sceneSmooth;
+    private TextView durationValue;
     /** Живое превью сцены в приложении. */
     private WallpaperRenderer glassRenderer;
     private SceneClip glassClip;
@@ -226,6 +229,7 @@ public class MainActivity extends Activity {
         glassTintBottom = cfg.glassTintBottom;
         glassBrightness = cfg.glassBrightness;
         glassDurationMs = cfg.glassDurationMs;
+        sceneSmooth = cfg.sceneSmooth;
         lightPalette = cfg.lightPalette;
         lightColors = cfg.lightColors.clone();
         lightBrightness = cfg.lightBrightness;
@@ -314,12 +318,11 @@ public class MainActivity extends Activity {
         lightControls(glassIsland);
         squaresControls(glassIsland);
         updateColorControls();
-        // Значение — вся длительность: основное движение и плавные разгон и торможение.
-        sliderRow(glassIsland, "Длительность анимации",
-                "Вместе с плавным разгоном в начале и торможением в конце",
+        // Значение — вся длительность: основное движение и, если включено, плавные разгон и
+        // торможение.
+        LinearLayout durationRow = sliderRow(glassIsland, "Длительность анимации", null,
                 Prefs.MIN_GLASS_DURATION, Prefs.MAX_GLASS_DURATION, glassDurationMs / 100,
-                value -> String.format(java.util.Locale.ROOT, "%.1f с",
-                        Easing.sceneDuration(value * 100) / 1000f),
+                value -> durationText(value * 100),
                 value -> {
                     glassDurationMs = value * 100;
                     sp.edit().putInt(Prefs.KEY_GLASS_DURATION, value).apply();
@@ -327,6 +330,10 @@ public class MainActivity extends Activity {
                     newGlassClip();
                     playGlassPreview();
                 });
+        durationValue = (TextView) ((LinearLayout) durationRow.getChildAt(0)).getChildAt(1);
+        switchRow(glassIsland, Prefs.KEY_SCENE_SMOOTH, sceneSmooth, "Плавный старт и остановка",
+                "Медленный разгон в начале и торможение в конце — середина с прежней скоростью, "
+                        + "анимация длиннее");
 
         // Видео
         videoGroup = vertical();
@@ -496,6 +503,18 @@ public class MainActivity extends Activity {
         editor.apply();
         Prefs.bumpRevision(this);
         updateEnabled();
+        if (Prefs.KEY_SCENE_SMOOTH.equals(key)) {
+            sceneSmooth = checked;
+            durationValue.setText(durationText(glassDurationMs));
+            newGlassClip();
+            playGlassPreview();
+        }
+    }
+
+    /** Вся длительность анимации сцены — с разгоном и торможением, если они включены. */
+    private String durationText(int durationMs) {
+        return String.format(java.util.Locale.ROOT, "%.1f с",
+                Easing.sceneDuration(durationMs, sceneSmooth) / 1000f);
     }
 
     private void onLockActionChanged(int action) {
@@ -1249,13 +1268,14 @@ public class MainActivity extends Activity {
     private void newGlassClip() {
         if (glassRenderer == null) return;
         if (glassClip != null) glassClip.release();
-        SceneClip clip = new SceneClip(Easing.sceneDuration(glassDurationMs), false);
+        SceneClip clip = new SceneClip(Easing.sceneDuration(glassDurationMs, sceneSmooth), false,
+                sceneSmooth);
         clip.setOnChange(() -> {
             if (glassRenderer != null) glassRenderer.requestSceneFrame();
         });
         glassClip = clip;
         glassRenderer.setSceneSource(WallpaperRenderer.SOURCE_FORWARD, clip);
-        clip.seekTo(Easing.sceneDuration(glassDurationMs));
+        clip.seekTo(Easing.sceneDuration(glassDurationMs, sceneSmooth));
     }
 
     private void playGlassPreview() {
