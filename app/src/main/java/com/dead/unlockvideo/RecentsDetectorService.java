@@ -25,6 +25,17 @@ public class RecentsDetectorService extends AccessibilityService {
     };
     private static final int MAX_NODES = 400;
     private static final long CONTENT_THROTTLE_MS = 120;
+    /**
+     * Сколько ждать, что признаки списка недавних не появятся, прежде чем решить «рабочий
+     * стол». По журналу кнопка «Закрыть все» появляется через 0,36–0,47 с после начала.
+     */
+    private static final long HOME_CONFIRM_MS = 500;
+
+    private final android.os.Handler handler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private long homeCandidateAt;
+    private boolean checkPosted;
+    private String lastHomeSignature = "";
 
     private String launcherPackage;
     private long lastContentCheck;
@@ -45,6 +56,7 @@ public class RecentsDetectorService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
+        handler.removeCallbacksAndMessages(null);
         LauncherState.setServiceRunning(false);
         super.onDestroy();
     }
@@ -59,27 +71,86 @@ public class RecentsDetectorService extends AccessibilityService {
     public void onAccessibilityEvent(AccessibilityEvent event) {
         CharSequence pkg = event.getPackageName();
         if (pkg == null || launcherPackage == null) return;
-        String packageName = pkg.toString();
-        int type = event.getEventType();
+        if (!launcherPackage.contentEquals(pkg)) return;
+        scheduleCheck();
+    }
 
-        if (!packageName.equals(launcherPackage)) return;
-
-        // Лаунчер: рабочий стол или список недавних. Изменения содержимого — не чаще,
-        // чем раз в CONTENT_THROTTLE_MS.
-        if (type == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
-            long now = SystemClock.uptimeMillis();
-            if (now - lastContentCheck < CONTENT_THROTTLE_MS) return;
-            lastContentCheck = now;
+    /**
+     * Проверка экрана лаунчера — не чаще раза в CONTENT_THROTTLE_MS, но последнее изменение
+     * никогда не теряется: после паузы экран проверяется ещё раз.
+     */
+    private void scheduleCheck() {
+        long now = SystemClock.uptimeMillis();
+        long wait = lastContentCheck + CONTENT_THROTTLE_MS - now;
+        if (wait <= 0) {
+            handler.removeCallbacks(check);
+            checkPosted = false;
+            check.run();
+        } else if (!checkPosted) {
+            checkPosted = true;
+            handler.postDelayed(check, wait);
         }
+    }
+
+    private final Runnable confirmHome = () -> {
         AccessibilityNodeInfo root = getRootInActiveWindow();
-        if (root == null) return;
-        if (root.getPackageName() == null
+        long candidate = homeCandidateAt;
+        homeCandidateAt = 0;
+        if (root == null || root.getPackageName() == null
                 || !launcherPackage.contentEquals(root.getPackageName())) {
             return;
         }
         String marker = findRecentsMarker(root);
-        set(marker != null ? LauncherState.RECENTS : LauncherState.HOME,
-                marker != null ? "признак «" + marker + "»" : "признаков списка нет");
+        if (marker != null) {
+            EventLog.add(this, "спец. возможности: был не рабочий стол, а начало списка "
+                    + "недавних; элементы в начале: " + lastHomeSignature);
+            set(LauncherState.RECENTS, "признак «" + marker + "»");
+            return;
+        }
+        set(LauncherState.HOME, "признаков списка нет "
+                + (SystemClock.uptimeMillis() - candidate) + "мс");
+    };
+
+    private final Runnable check = () -> {
+        checkPosted = false;
+        lastContentCheck = SystemClock.uptimeMillis();
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root == null || root.getPackageName() == null
+                || !launcherPackage.contentEquals(root.getPackageName())) {
+            return;
+        }
+        String marker = findRecentsMarker(root);
+        if (marker != null) {
+            // Список недавних — сразу; кандидат в «рабочий стол» отменяется.
+            homeCandidateAt = 0;
+            handler.removeCallbacks(confirmHome);
+            set(LauncherState.RECENTS, "признак «" + marker + "»");
+        } else if (homeCandidateAt == 0) {
+            // Похоже на рабочий стол, но в начале открытия списка недавних его признаков
+            // ещё нет — подтверждаем, только если они так и не появятся.
+            homeCandidateAt = lastContentCheck;
+            lastHomeSignature = signature(root);
+            handler.postDelayed(confirmHome, HOME_CONFIRM_MS);
+        }
+    };
+
+    /** Несколько идентификаторов элементов — чтобы найти ранние признаки списка недавних. */
+    private static String signature(AccessibilityNodeInfo root) {
+        java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
+        ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
+        queue.add(root);
+        int visited = 0;
+        while (!queue.isEmpty() && visited < MAX_NODES && ids.size() < 25) {
+            AccessibilityNodeInfo node = queue.poll();
+            visited++;
+            String id = node.getViewIdResourceName();
+            if (id != null) ids.add(id.substring(id.indexOf('/') + 1));
+            for (int i = 0; i < node.getChildCount(); i++) {
+                AccessibilityNodeInfo child = node.getChild(i);
+                if (child != null) queue.add(child);
+            }
+        }
+        return ids.toString();
     }
 
     @Override

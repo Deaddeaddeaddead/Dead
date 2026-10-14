@@ -186,6 +186,7 @@ public class VideoWallpaperService extends WallpaperService {
         private boolean pendingHome;
         /** Когда обои стали видны после приложения — старые наблюдения лаунчера не в счёт. */
         private long visibleSince;
+        private long lastHomeStart;
 
         // Эффекты
         /** Текущий масштаб от эффекта разблокировки. */
@@ -387,17 +388,11 @@ public class VideoWallpaperService extends WallpaperService {
                 // когда после появления обоев она увидит рабочий стол (а не список недавних;
                 // при лёгком сворачивании лаунчер вообще не показывается).
                 pendingHome = true;
-                // Событие лаунчера может прийти чуть раньше, чем обои стали видны.
-                visibleSince = SystemClock.uptimeMillis() - 300;
+                visibleSince = SystemClock.uptimeMillis();
                 log("ждём рабочего стола");
-                if (LauncherState.state() == LauncherState.HOME
-                        && LauncherState.changedAt() >= visibleSince) {
-                    onLauncherState(LauncherState.HOME);
-                }
             } else if (backFromApp && cfg.startOnHome && !isPreview()) {
                 if (cfg.startInRecents || !zoomReported || launcherZoom < HOME_ZOOM_THRESHOLD) {
-                    log("запуск: возврат на рабочий стол");
-                    triggerForward(true);
+                    startFromHome();
                 } else {
                     // Обои видны, но обои ещё отдалены — это список недавних приложений.
                     pendingHome = true;
@@ -410,14 +405,29 @@ public class VideoWallpaperService extends WallpaperService {
             }
         }
 
+        /**
+         * Запуск при возврате на рабочий стол. Если видео запустилось так меньше 1,5 с назад
+         * (обои на мгновение скрылись при переходе One UI), не перезапускаем его с начала.
+         */
+        private void startFromHome() {
+            long now = SystemClock.uptimeMillis();
+            if (phase == PHASE_PLAYING && now - lastHomeStart < 1500) {
+                log("возврат на рабочий стол: видео уже идёт, продолжаем");
+                resume();
+                return;
+            }
+            lastHomeStart = now;
+            log("запуск: возврат на рабочий стол");
+            triggerForward(true);
+        }
+
         /** Служба специальных возможностей сообщила, что теперь на экране. */
         @Override
         public void onLauncherState(int state) {
             if (pendingHome && visible && state == LauncherState.HOME
                     && LauncherState.changedAt() >= visibleSince) {
                 pendingHome = false;
-                log("запуск: возврат на рабочий стол");
-                triggerForward(true);
+                startFromHome();
             }
         }
 
