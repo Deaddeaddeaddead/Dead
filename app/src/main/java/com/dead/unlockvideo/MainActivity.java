@@ -62,6 +62,20 @@ public class MainActivity extends Activity {
     private static String reverseError;
     private static MainActivity shown;
 
+    private static final String[] LOCK_TEXT = {
+            "Продолжит с того же кадра",
+            "К первому кадру, пока экран выключен",
+            "Назад на блокировке, вперёд после разблокировки"};
+    private static final String[] POSE_TEXT = {
+            "Обои замирают",
+            "Вид экрана блокировки, реверс — прямо на AOD",
+            "Видео доигрывает, реверс — когда появится блокировка"};
+    private static final String[] ZOOM_TEXT = {
+            null,
+            "Увеличивается после разблокировки",
+            "Увеличено на блокировке, после разблокировки — как обычно"};
+    private static final String[] ZOOM_SPEED_TEXT = {"Вместе с видео или реверсом", null};
+
     private SharedPreferences sp;
     private final Map<String, Switch> switches = new HashMap<>();
     private ImageView thumbnail;
@@ -76,18 +90,17 @@ public class MainActivity extends Activity {
     private int plays;
     private Segmented endChoice;
     private Segmented lockChoice;
-    private TextView lockDescription;
-    private TextView noTriggerWarning;
-    private View recentsItem;
-    private View recentsSwitchItem;
-    private LinearLayout detectorRow;
-    private LinearLayout screenOnItem;
-    private TextView screenOnNote;
+    private Segmented poseChoice;
     private Segmented zoomChoice;
-    private View zoomAmountItem;
     private Segmented zoomSpeedChoice;
+    private TextView noTriggerWarning;
+    private View screenOnRow;
+    private View recentsRow;
+    private View detectorRow;
+    private View restrictedRow;
+    private View zoomAmountItem;
     private View zoomDurationItem;
-    private View zoomOnDismissItem;
+    private View zoomOnDismissRow;
     private LinearLayout reverseBox;
     private ProgressBar reverseProgress;
     private TextView reverseStatus;
@@ -174,78 +187,47 @@ public class MainActivity extends Activity {
         pickButton.setOnClickListener(v -> pickVideo());
         card.addView(pickButton, pickParams);
 
-        // Когда запускать
-        section(root, "Когда запускать");
-        switchItem(root, Prefs.KEY_START_ON_UNLOCK, cfg.startOnUnlock, "При разблокировке",
-                "Видео запускается каждый раз, когда вы разблокируете телефон.");
-        switchItem(root, Prefs.KEY_UNLOCK_ON_LOCKSCREEN, cfg.unlockOnLockscreen,
-                "Сразу после распознавания лица",
-                "Видео запускается прямо на экране блокировки, как только лицо распознано. "
-                        + "Если выключено — только когда экран блокировки уберётся (после свайпа).");
-        screenOnItem = switchItem(root, Prefs.KEY_START_ON_SCREEN_ON, cfg.startOnScreenOn,
-                "При включении экрана",
-                "Видео играет прямо на экране блокировки, ещё до разблокировки.");
-        screenOnNote = description("Недоступно при возврате «Реверсом»: на экране блокировки "
-                + "играет реверс, а вперёд — после разблокировки.");
-        screenOnNote.setTextColor(getColor(R.color.accent));
-        root.addView(screenOnNote);
-        switchItem(root, Prefs.KEY_START_ON_HOME, cfg.startOnHome,
-                "При возврате на рабочий стол",
-                "Видео запускается с начала, когда вы выходите из приложения "
-                        + "и начинается переход на рабочий стол.");
-        LinearLayout detectorItem = vertical();
-        LinearLayout detectorCard = card(detectorItem);
-        detectorRow = row("Распознавание экрана", "");
-        detectorCard.addView(detectorRow);
-        LinearLayout enableRow = row("1. Включить службу",
-                "Откроется служба «Видеообои» в специальных возможностях — включите её");
-        enableRow.setOnClickListener(v -> openAccessibilitySettings());
-        detectorCard.addView(enableRow);
-        LinearLayout restrictedRow = row("2. Если написано «Ограниченная настройка»",
-                "Откроется «О приложении»: нажмите ⋮ вверху справа → «Разрешить ограниченные "
-                        + "настройки», затем снова шаг 1");
+        // Запуск
+        LinearLayout start = island(root, "Запуск");
+        switchRow(start, Prefs.KEY_START_ON_UNLOCK, cfg.startOnUnlock, "При разблокировке", null);
+        switchRow(start, Prefs.KEY_UNLOCK_ON_LOCKSCREEN, cfg.unlockOnLockscreen,
+                "Сразу после распознавания лица", "Ещё на экране блокировки, до свайпа");
+        screenOnRow = switchRow(start, Prefs.KEY_START_ON_SCREEN_ON, cfg.startOnScreenOn,
+                "При включении экрана", null);
+        switchRow(start, Prefs.KEY_START_ON_HOME, cfg.startOnHome,
+                "При возврате на рабочий стол", "Когда выходите из приложения");
+        recentsRow = switchRow(start, Prefs.KEY_START_IN_RECENTS, cfg.startInRecents,
+                "Также в списке недавних", null);
+        detectorRow = row("Распознавание экрана", null);
+        detectorRow.setOnClickListener(v -> openAccessibilitySettings());
+        start.addView(detectorRow);
+        restrictedRow = row("Включение заблокировано?",
+                "О приложении → ⋮ → «Разрешить ограниченные настройки»");
         restrictedRow.setOnClickListener(v -> openAppDetails());
-        detectorCard.addView(restrictedRow);
-        detectorItem.addView(description("Обои сами не могут отличить рабочий стол от списка "
-                + "недавних приложений или лёгкого сворачивания — One UI им этого не сообщает. "
-                + "Это делает служба специальных возможностей «Видеообои»: она получает "
-                + "события только от лаунчера и ничего не сохраняет. Пункт «Разрешить "
-                + "ограниченные настройки» появляется в меню ⋮ только после попытки включить "
-                + "службу, если система её заблокировала; если блокировки нет — шаг 2 не нужен."));
-        root.addView(detectorItem);
-        recentsItem = detectorItem;
-        recentsSwitchItem = switchItem(root, Prefs.KEY_START_IN_RECENTS, cfg.startInRecents,
-                "Также в списке недавних приложений",
-                "Запускать уже при открытии списка недавних приложений (Recents), "
-                        + "не дожидаясь перехода на рабочий стол.");
-        switchItem(root, Prefs.KEY_ONCE, cfg.once, "Только один раз",
-                "После первого проигрывания видео больше не запускается. "
-                        + "Запустить снова — «Проиграть сейчас» внизу.");
-        noTriggerWarning = description("Не выбрано ни одного запуска — "
-                + "видео будет стоять на первом кадре.");
-        noTriggerWarning.setTextColor(getColor(R.color.accent));
-        root.addView(noTriggerWarning);
+        start.addView(restrictedRow);
+        noTriggerWarning = note("Не выбран ни один запуск — видео стоит на первом кадре");
+        start.addView(noTriggerWarning);
 
-        // Как проигрывать
-        section(root, "Как проигрывать");
-        stepperItem(root);
-        endChoice = segmented(root, "После окончания",
+        // Воспроизведение
+        LinearLayout playback = island(root, "Воспроизведение");
+        stepperRow(playback);
+        endChoice = new Segmented(playback, "После окончания",
                 new String[] {"Последний кадр", "Первый кадр"},
                 cfg.endOnLastFrame ? 0 : 1, index -> {
                     sp.edit().putBoolean(Prefs.KEY_END_ON_LAST_FRAME, index == 0).apply();
                     Prefs.bumpRevision(this);
                 });
-        endChoice.item.addView(description("На каком кадре остановиться, когда видео доиграет."));
+        switchRow(playback, Prefs.KEY_ONCE, cfg.once, "Только один раз",
+                "Повторить — «Проиграть сейчас»");
+        switchRow(playback, Prefs.KEY_SOUND, cfg.sound, "Звук", null);
 
-        // При блокировке
-        section(root, "При блокировке экрана");
-        lockChoice = segmented(root, "Видео",
+        // Блокировка и AOD
+        LinearLayout lock = island(root, "Блокировка и AOD");
+        lockChoice = new Segmented(lock, "При блокировке",
                 new String[] {"Оставить", "К началу", "Реверсом"},
                 cfg.lockAction, this::onLockActionChanged);
-        lockDescription = description("");
-        lockChoice.item.addView(lockDescription);
         reverseBox = vertical();
-        reverseBox.setPadding(dp(24), dp(4), dp(24), 0);
+        reverseBox.setPadding(dp(24), 0, dp(24), dp(16));
         reverseProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         reverseProgress.setMax(100);
         reverseProgress.setProgressTintList(ColorStateList.valueOf(getColor(R.color.accent)));
@@ -253,78 +235,59 @@ public class MainActivity extends Activity {
         reverseStatus = text("", 14, R.color.accent);
         reverseBox.addView(reverseStatus);
         lockChoice.item.addView(reverseBox);
+        poseChoice = new Segmented(lock, "На AOD после блокировки",
+                new String[] {"Как есть", "Блокировка", "Рабочий стол"}, cfg.screenOffPose,
+                index -> {
+                    sp.edit().putInt(Prefs.KEY_SCREEN_OFF_POSE, index).apply();
+                    Prefs.bumpRevision(this);
+                    updateEnabled();
+                });
 
         // Эффекты
-        section(root, "Эффекты");
-        zoomChoice = segmented(root, "Масштаб при разблокировке",
+        LinearLayout effects = island(root, "Эффекты");
+        zoomChoice = new Segmented(effects, "Масштаб при разблокировке",
                 new String[] {"Нет", "Приблизить", "Отдалить"}, cfg.unlockZoom, index -> {
                     sp.edit().putInt(Prefs.KEY_UNLOCK_ZOOM, index).apply();
                     Prefs.bumpRevision(this);
                     updateEnabled();
                 });
-        zoomChoice.item.addView(description("«Приблизить» — при разблокировке видео плавно "
-                + "увеличивается. «Отдалить» — на экране блокировки видео увеличено и при "
-                + "разблокировке плавно возвращается к обычному размеру."));
-        zoomAmountItem = sliderItem(root, "Сила масштаба", 1, Prefs.MAX_ZOOM_AMOUNT,
+        zoomAmountItem = sliderRow(effects, "Сила масштаба", null, 1, Prefs.MAX_ZOOM_AMOUNT,
                 cfg.unlockZoomAmount, value -> value + "%", value -> {
                     sp.edit().putInt(Prefs.KEY_UNLOCK_ZOOM_AMOUNT, value).apply();
                     Prefs.bumpRevision(this);
                 });
-        zoomSpeedChoice = segmented(root, "Скорость масштаба",
+        zoomSpeedChoice = new Segmented(effects, "Скорость масштаба",
                 new String[] {"Как у видео", "Своя"}, cfg.zoomSync ? 0 : 1, index -> {
                     sp.edit().putBoolean(Prefs.KEY_ZOOM_SYNC, index == 0).apply();
                     Prefs.bumpRevision(this);
                     updateEnabled();
                 });
-        zoomSpeedChoice.item.addView(description("«Как у видео» — масштаб меняется, пока "
-                + "играет видео (или реверс). Если видео в этот момент не играет, "
-                + "используется своя длительность."));
-        zoomDurationItem = sliderItem(root, "Своя длительность масштаба",
-                Prefs.MIN_ZOOM_DURATION, Prefs.MAX_ZOOM_DURATION,
-                cfg.zoomDurationMs / 100,
+        zoomDurationItem = sliderRow(effects, "Своя длительность", null,
+                Prefs.MIN_ZOOM_DURATION, Prefs.MAX_ZOOM_DURATION, cfg.zoomDurationMs / 100,
                 value -> String.format(java.util.Locale.ROOT, "%.1f с", value / 10f),
                 value -> {
                     sp.edit().putInt(Prefs.KEY_ZOOM_DURATION, value).apply();
                     Prefs.bumpRevision(this);
                 });
-        zoomOnDismissItem = switchItem(root, Prefs.KEY_ZOOM_ON_DISMISS, cfg.zoomOnDismiss,
-                "Масштаб — когда убирается экран блокировки",
-                "При разблокировке лицом видео запускается сразу, а масштаб меняется, только "
-                        + "когда экран блокировки убран свайпом и начался переход на рабочий стол.");
-        LinearLayout parallaxItem = sliderItem(root, "Параллакс", 0, Prefs.MAX_PARALLAX,
+        zoomOnDismissRow = switchRow(effects, Prefs.KEY_ZOOM_ON_DISMISS, cfg.zoomOnDismiss,
+                "Масштаб после свайпа", "При разблокировке лицом видео — сразу, масштаб — "
+                        + "когда убран экран блокировки");
+        sliderRow(effects, "Параллакс", "Сдвиг по наклону телефона", 0, Prefs.MAX_PARALLAX,
                 cfg.parallax, value -> value == 0 ? "выкл." : value + "%", value -> {
                     sp.edit().putInt(Prefs.KEY_PARALLAX, value).apply();
                     Prefs.bumpRevision(this);
                 });
-        parallaxItem.addView(description("Изображение слегка смещается, когда вы "
-                + "поворачиваете телефон (по гироскопу), и плавно возвращается к центру. "
-                + "Видео при этом немного увеличивается, чтобы не было видно краёв."));
-        Segmented poseChoice = segmented(root, "При выключении экрана (AOD)",
-                new String[] {"Как есть", "Блокировка", "Рабочий стол"}, cfg.screenOffPose,
-                index -> {
-                    sp.edit().putInt(Prefs.KEY_SCREEN_OFF_POSE, index).apply();
-                    Prefs.bumpRevision(this);
-                });
-        poseChoice.item.addView(description("Куда плавно переходят обои на Always On Display "
-                + "сразу после блокировки. «Блокировка» — масштаб экрана блокировки, а при "
-                + "возврате «Реверсом» реверс играет прямо на AOD. «Рабочий стол» — видео "
-                + "доигрывает до конца, реверс и масштаб — когда появится экран блокировки. "
-                + "«Как есть» — всё замирает. Параллакс в любом случае возвращается в центр, "
-                + "гироскоп отключается."));
 
         // Дополнительно
-        section(root, "Дополнительно");
-        switchItem(root, Prefs.KEY_SOUND, cfg.sound, "Звук", null);
-        LinearLayout playNow = row("Проиграть сейчас", "Запустить видео с начала");
+        LinearLayout extra = island(root, "Дополнительно");
+        LinearLayout playNow = row("Проиграть сейчас", "С начала — на рабочем столе");
         playNow.setOnClickListener(v -> {
             Prefs.playNow(this);
             Toast.makeText(this, "Видео запустится, когда вы вернётесь на рабочий стол",
                     Toast.LENGTH_SHORT).show();
         });
-        LinearLayout extra = card(root);
         extra.addView(playNow);
-        LinearLayout log = row("Журнал событий",
-                "Что делали обои — пригодится, если что-то работает не так");
+        LinearLayout log = row("Журнал событий", null);
         log.setOnClickListener(v -> showEventLog());
         extra.addView(log);
 
@@ -413,36 +376,38 @@ public class MainActivity extends Activity {
         boolean anyTrigger = checked(Prefs.KEY_START_ON_UNLOCK)
                 || checked(Prefs.KEY_START_ON_SCREEN_ON) || checked(Prefs.KEY_START_ON_HOME);
         noTriggerWarning.setVisibility(anyTrigger ? View.GONE : View.VISIBLE);
-        setRowEnabled(recentsItem, checked(Prefs.KEY_START_ON_HOME));
-        setRowEnabled(recentsSwitchItem, checked(Prefs.KEY_START_ON_HOME));
+        boolean home = checked(Prefs.KEY_START_ON_HOME);
+        setRowEnabled(recentsRow, home);
+        setRowEnabled(detectorRow, home);
+        setRowEnabled(restrictedRow, home);
         boolean zoomOn = zoomChoice.selected != Prefs.ZOOM_NONE;
         setRowEnabled(zoomAmountItem, zoomOn);
         setRowEnabled(zoomSpeedChoice.item, zoomOn);
         setRowEnabled(zoomDurationItem, zoomOn);
-        setRowEnabled(zoomOnDismissItem, zoomOn);
+        setRowEnabled(zoomOnDismissRow, zoomOn);
         boolean reverse = lockChoice.selected == Prefs.LOCK_REVERSE;
-        setRowEnabled(screenOnItem, !reverse);
-        screenOnNote.setVisibility(reverse ? View.VISIBLE : View.GONE);
-        switch (lockChoice.selected) {
-            case Prefs.LOCK_KEEP:
-                lockDescription.setText("Видео остаётся на том же кадре и продолжает "
-                        + "с этого места.");
-                break;
-            case Prefs.LOCK_REVERSE:
-                lockDescription.setText("Когда появляется экран блокировки, видео плавно "
-                        + "идёт назад, а после разблокировки — вперёд с того же кадра. "
-                        + "Нужна разовая подготовка видео; вперёд играет оригинал без потери "
-                        + "качества.");
-                break;
-            default:
-                lockDescription.setText("Пока экран выключен, видео возвращается "
-                        + "к первому кадру.");
-        }
+        setRowBlocked(screenOnRow, reverse);
+        setSubtitle(screenOnRow, reverse ? "Недоступно при «Реверсом»" : "Ещё до разблокировки",
+                reverse ? R.color.accent : R.color.text2);
+        setSubtitle(lockChoice.item, LOCK_TEXT[lockChoice.selected], R.color.text2);
+        setSubtitle(poseChoice.item, POSE_TEXT[poseChoice.selected], R.color.text2);
+        setSubtitle(zoomChoice.item, ZOOM_TEXT[zoomChoice.selected], R.color.text2);
+        setSubtitle(zoomSpeedChoice.item, ZOOM_SPEED_TEXT[zoomSpeedChoice.selected],
+                R.color.text2);
     }
 
     private void setRowEnabled(View row, boolean enabled) {
         row.setAlpha(enabled ? 1f : 0.4f);
         setEnabledDeep(row, enabled);
+    }
+
+    /** Строка недоступна, но подпись с причиной остаётся яркой. */
+    private void setRowBlocked(View row, boolean blocked) {
+        setEnabledDeep(row, !blocked);
+        float alpha = blocked ? 0.4f : 1f;
+        ViewGroup group = (ViewGroup) row;
+        ((ViewGroup) group.getChildAt(0)).getChildAt(0).setAlpha(alpha);
+        group.getChildAt(1).setAlpha(alpha);
     }
 
     private static void setEnabledDeep(View view, boolean enabled) {
@@ -680,11 +645,10 @@ public class MainActivity extends Activity {
     }
 
     private void updateDetectorStatus() {
-        TextView subtitle = (TextView) ((LinearLayout) detectorRow.getChildAt(0)).getChildAt(1);
         boolean on = detectorEnabled();
-        subtitle.setText(on ? "Включено — список недавних не запускает видео"
-                : "Выключено — шаги ниже");
-        subtitle.setTextColor(getColor(on ? R.color.text2 : R.color.accent));
+        setSubtitle(detectorRow, on ? "Включено — отличает список недавних"
+                : "Выключено — нажмите, чтобы включить", on ? R.color.text2 : R.color.accent);
+        restrictedRow.setVisibility(on ? View.GONE : View.VISIBLE);
     }
 
     /** Сразу страница нашей службы; если прошивка так не умеет — общий список. */
@@ -776,6 +740,19 @@ public class MainActivity extends Activity {
         return card;
     }
 
+    /** Островок: подпись и одна плашка со строками через тонкие разделители. */
+    private LinearLayout island(LinearLayout root, String title) {
+        section(root, title);
+        LinearLayout card = card(root);
+        GradientDrawable line = new GradientDrawable();
+        line.setColor(getColor(R.color.divider));
+        line.setSize(1, Math.max(1, Math.round(getResources().getDisplayMetrics().density * 0.7f)));
+        card.setDividerDrawable(line);
+        card.setDividerPadding(dp(24));
+        card.setShowDividers(LinearLayout.SHOW_DIVIDER_MIDDLE);
+        return card;
+    }
+
     /** Фон главной карточки: карточка + мягкое цветное свечение снизу. */
     private Drawable heroBackground() {
         GradientDrawable base = new GradientDrawable();
@@ -815,15 +792,10 @@ public class MainActivity extends Activity {
         applyTitleGradient();
     }
 
-    /**
-     * Пункт с переключателем: отдельная плашка, пояснение серым текстом под ней.
-     * Возвращает контейнер пункта (плашка + пояснение).
-     */
-    private LinearLayout switchItem(LinearLayout root, String key, boolean value, String title,
-                                    String description) {
-        LinearLayout item = vertical();
-        LinearLayout card = card(item);
-        LinearLayout row = row(title, null);
+    /** Строка с переключателем; нажатие на всю строку переключает. */
+    private LinearLayout switchRow(LinearLayout island, String key, boolean value, String title,
+                                   String subtitle) {
+        LinearLayout row = row(title, subtitle);
         Switch toggle = new Switch(this);
         toggle.setThumbResource(R.drawable.switch_thumb);
         toggle.setTrackResource(R.drawable.switch_track);
@@ -834,16 +806,13 @@ public class MainActivity extends Activity {
         toggle.setOnCheckedChangeListener((button, isChecked) -> onSwitchChanged(key, isChecked));
         row.addView(toggle);
         row.setOnClickListener(v -> toggle.toggle());
-        card.addView(row);
-        if (description != null) item.addView(description(description));
         switches.put(key, toggle);
-        root.addView(item);
-        return item;
+        island.addView(row);
+        return row;
     }
 
-    private void stepperItem(LinearLayout root) {
-        LinearLayout item = vertical();
-        LinearLayout row = row("Сколько раз подряд", null);
+    private void stepperRow(LinearLayout island) {
+        LinearLayout row = row("Сколько раз подряд", "После " + Prefs.MAX_PLAYS + " — ∞");
         Button minus = roundButton("−");
         minus.setOnClickListener(v -> changeCount(-1));
         countValue = text(countLabel(), 18, R.color.text);
@@ -855,26 +824,25 @@ public class MainActivity extends Activity {
         row.addView(minus);
         row.addView(countValue);
         row.addView(plus);
-        card(item).addView(row);
-        item.addView(description("После " + Prefs.MAX_PLAYS + " идёт ∞ — бесконечный повтор."));
-        root.addView(item);
+        island.addView(row);
     }
 
     interface OnSelect {
         void onSelect(int index);
     }
 
-    /** Выбор одного варианта из нескольких — «таблетки» в плашке, как в One UI. */
+    /** Строка выбора: заголовок, короткая подпись и «таблетки» под ними, как в One UI. */
     private final class Segmented {
         final LinearLayout item = vertical();
         final TextView[] options;
         int selected;
 
-        Segmented(String title, String[] labels, int initial, OnSelect listener) {
-            LinearLayout card = card(item);
+        Segmented(LinearLayout island, String title, String[] labels, int initial,
+                  OnSelect listener) {
             TextView header = text(title, 17, R.color.text);
-            header.setPadding(dp(24), dp(16), dp(24), dp(10));
-            card.addView(header);
+            header.setPadding(dp(24), dp(16), dp(24), 0);
+            item.addView(header);
+            item.setTag(addSubtitle(item, null));
             LinearLayout bar = new LinearLayout(MainActivity.this);
             bar.setBackgroundResource(R.drawable.segment_bg);
             bar.setPadding(dp(4), dp(4), dp(4), dp(4));
@@ -895,9 +863,10 @@ public class MainActivity extends Activity {
             }
             LinearLayout.LayoutParams barParams = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            barParams.setMargins(dp(16), 0, dp(16), dp(16));
-            card.addView(bar, barParams);
+            barParams.setMargins(dp(16), dp(12), dp(16), dp(16));
+            item.addView(bar, barParams);
             select(initial);
+            island.addView(item);
         }
 
         void select(int index) {
@@ -923,11 +892,13 @@ public class MainActivity extends Activity {
         void onValue(int value);
     }
 
-    /** Плашка с ползунком: заголовок, значение справа, ползунок под ними. */
-    private LinearLayout sliderItem(LinearLayout root, String title, int min, int max,
-                                    int value, IntFormat format, OnValue listener) {
+    /**
+     * Строка с ползунком: заголовок, значение справа, ползунок под ними. Значение
+     * сохраняется, когда палец отпущен, — не на каждом шаге перетаскивания.
+     */
+    private LinearLayout sliderRow(LinearLayout island, String title, String subtitle, int min,
+                                   int max, int value, IntFormat format, OnValue listener) {
         LinearLayout item = vertical();
-        LinearLayout card = card(item);
         LinearLayout header = new LinearLayout(this);
         header.setPadding(dp(24), dp(16), dp(24), 0);
         TextView label = text(title, 17, R.color.text);
@@ -936,7 +907,8 @@ public class MainActivity extends Activity {
         TextView valueText = text(format.format(value), 15, R.color.accent);
         valueText.setTypeface(Typeface.DEFAULT_BOLD);
         header.addView(valueText);
-        card.addView(header);
+        item.addView(header);
+        item.setTag(addSubtitle(item, subtitle));
 
         SeekBar bar = new SeekBar(this);
         bar.setMin(min);
@@ -948,37 +920,54 @@ public class MainActivity extends Activity {
         bar.setProgressBackgroundTintList(ColorStateList.valueOf(getColor(R.color.tonal)));
         bar.setPadding(dp(24), dp(12), dp(24), dp(18));
         bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            private boolean tracking;
+
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 valueText.setText(format.format(progress));
-                if (fromUser) listener.onValue(progress);
+                if (fromUser && !tracking) listener.onValue(progress);
             }
 
             @Override
             public void onStartTrackingTouch(SeekBar seekBar) {
+                tracking = true;
             }
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
+                tracking = false;
+                listener.onValue(seekBar.getProgress());
             }
         });
-        card.addView(bar, new LinearLayout.LayoutParams(
+        item.addView(bar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        root.addView(item);
+        island.addView(item);
         return item;
     }
 
-    private Segmented segmented(LinearLayout root, String title, String[] labels, int initial,
-                                OnSelect listener) {
-        Segmented segmented = new Segmented(title, labels, initial, listener);
-        root.addView(segmented.item);
-        return segmented;
+    /** Предупреждение внутри островка. */
+    private TextView note(String value) {
+        TextView view = text(value, 14, R.color.accent);
+        view.setPadding(dp(24), dp(14), dp(24), dp(14));
+        return view;
     }
 
-    private TextView description(String value) {
-        TextView view = text(value, 14, R.color.text2);
-        view.setPadding(dp(24), dp(10), dp(24), dp(4));
-        return view;
+    /** Серая подпись под заголовком; пустая — скрыта. */
+    private TextView addSubtitle(LinearLayout parent, String value) {
+        TextView sub = text("", 14, R.color.text2);
+        sub.setPadding(dp(24), dp(2), dp(24), 0);
+        parent.addView(sub);
+        sub.setText(value);
+        sub.setVisibility(value == null || value.isEmpty() ? View.GONE : View.VISIBLE);
+        return sub;
+    }
+
+    /** Меняет подпись строки (строки, выбора или ползунка — она хранится в теге). */
+    private void setSubtitle(View item, String value, int colorRes) {
+        TextView sub = (TextView) item.getTag();
+        sub.setText(value);
+        sub.setTextColor(getColor(colorRes));
+        sub.setVisibility(value == null || value.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
     private LinearLayout row(String title, String subtitle) {
@@ -994,11 +983,9 @@ public class MainActivity extends Activity {
         LinearLayout texts = vertical();
         texts.setPadding(0, 0, dp(12), 0);
         texts.addView(text(title, 17, R.color.text));
-        if (subtitle != null) {
-            TextView sub = text(subtitle, 14, R.color.text2);
-            sub.setPadding(0, dp(2), 0, 0);
-            texts.addView(sub);
-        }
+        TextView sub = addSubtitle(texts, subtitle);
+        sub.setPadding(0, dp(2), 0, 0);
+        row.setTag(sub);
         row.addView(texts, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         return row;

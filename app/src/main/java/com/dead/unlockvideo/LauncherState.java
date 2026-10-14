@@ -15,6 +15,8 @@ final class LauncherState {
     static final int APP = 1;
     static final int HOME = 2;
     static final int RECENTS = 3;
+    /** Лаунчер виден, но рабочий стол скрыт: начало открытия списка недавних, все приложения. */
+    static final int OTHER = 4;
 
     interface Listener {
         void onLauncherState(int state);
@@ -65,6 +67,7 @@ final class LauncherState {
             case APP: return "приложение";
             case HOME: return "рабочий стол";
             case RECENTS: return "список недавних";
+            case OTHER: return "лаунчер без рабочего стола";
             default: return "неизвестно";
         }
     }

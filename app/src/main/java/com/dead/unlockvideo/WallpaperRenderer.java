@@ -22,6 +22,8 @@ final class WallpaperRenderer {
     static final int SOURCE_REVERSE = 1;
     /** Если новый источник так и не прислал кадр — переключаемся всё равно. */
     private static final long SWITCH_TIMEOUT_MS = 300;
+    /** Порог изменения масштаба и сдвига (доля кадра) — около трети пикселя. */
+    private static final float TRANSFORM_EPSILON = 0.0003f;
 
     private final HandlerThread thread = new HandlerThread("wallpaper-gl");
     private final Handler handler;
@@ -175,7 +177,14 @@ final class WallpaperRenderer {
      * лишние перерисовки схлопываются.
      */
     void setTransform(float zoom, float shiftX, float shiftY) {
-        this.zoom = Math.max(1f, zoom);
+        float z = Math.max(1f, zoom);
+        // Изменение меньше доли пикселя не видно — не тратим на него перерисовку.
+        if (Math.abs(z - this.zoom) < TRANSFORM_EPSILON
+                && Math.abs(shiftX - this.shiftX) < TRANSFORM_EPSILON
+                && Math.abs(shiftY - this.shiftY) < TRANSFORM_EPSILON) {
+            return;
+        }
+        this.zoom = z;
         this.shiftX = shiftX;
         this.shiftY = shiftY;
         if (drawPosted.compareAndSet(false, true)) handler.post(drawTransform);

@@ -10,7 +10,6 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
-import android.hardware.display.DisplayManager;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.os.Handler;
@@ -19,7 +18,6 @@ import android.os.PowerManager;
 import android.os.SystemClock;
 import android.service.wallpaper.WallpaperService;
 import android.util.Log;
-import android.view.Display;
 import android.view.SurfaceHolder;
 
 import java.io.File;
@@ -39,11 +37,8 @@ public class VideoWallpaperService extends WallpaperService {
     private static final long UNLOCK_POLL_MS = 100;
     /** Опрос экрана лаунчера при возврате на рабочий стол. */
     private static final long HOME_PROBE_MS = 40;
-    /**
-     * Отдаление обоев от лаунчера (0 — рабочий стол, 1 — открыто приложение или список
-     * недавних). Когда оно падает ниже этого порога, начался переход на рабочий стол.
-     */
-    private static final float HOME_ZOOM_THRESHOLD = 0.6f;
+    /** Дольше не опрашиваем: рабочий стол к этому времени давно виден. */
+    private static final long HOME_PROBE_LIMIT_MS = 1500;
     /** Короче этого масштаб не делаем — иначе выглядит как скачок. */
     private static final int MIN_ZOOM_MS = 150;
     /** Параллакс на 100%: дополнительный масштаб, дающий запас для сдвига. */
@@ -141,34 +136,6 @@ public class VideoWallpaperService extends WallpaperService {
         private boolean aodForward;
         /** При включении экрана мгновенно вернуться к началу. */
         private boolean rewindOnScreenOn;
-        private DisplayManager displayManager;
-        private int displayState = Display.STATE_ON;
-
-        /** Самый ранний сигнал: дисплей перешёл из «включён» в AOD или «выключен». */
-        private final DisplayManager.DisplayListener displayListener =
-                new DisplayManager.DisplayListener() {
-                    @Override
-                    public void onDisplayChanged(int displayId) {
-                        if (displayId != Display.DEFAULT_DISPLAY) return;
-                        Display display = displayManager.getDisplay(displayId);
-                        if (display == null) return;
-                        int state = display.getState();
-                        if (state == displayState) return;
-                        log("дисплей: " + displayStateName(state));
-                        boolean wasOn = displayState == Display.STATE_ON;
-                        displayState = state;
-                        if (wasOn && state != Display.STATE_ON) goingOff("дисплей " + displayStateName(state));
-                        if (state == Display.STATE_ON) screenOffHandled = false;
-                    }
-
-                    @Override
-                    public void onDisplayAdded(int displayId) {
-                    }
-
-                    @Override
-                    public void onDisplayRemoved(int displayId) {
-                    }
-                };
         /**
          * Был ли телефон заблокирован (требовал проверки личности), когда включился экран.
          * Если нет (отсрочка блокировки, Smart Lock), разблокировкой считаем только уход
@@ -177,35 +144,44 @@ public class VideoWallpaperService extends WallpaperService {
         private boolean deviceLockedAtWake = true;
         /** Экран выключался — при пробуждении нужно заново запомнить состояние блокировки. */
         private boolean sampleOnWake;
-        /** Последнее отдаление обоев, присланное лаунчером. */
-        private float launcherZoom;
-        /** Лаунчер вообще присылает отдаление — по нему можно отличить Recents. */
-        private boolean zoomReported;
-        private int zoomBucket = -1;
-        /** Вернулись из приложения, но пока в списке недавних — ждём рабочего стола. */
-        private boolean pendingHome;
+        /**
+         * Вернулись из приложения: видео уже играет, а опрос лаунчера проверяет, не список ли
+         * это недавних (тогда пауза).
+         */
+        private boolean recentsWatch;
+        /** Видео на паузе, потому что открыт список недавних; на рабочем столе — продолжить. */
+        private boolean pausedInRecents;
         /** Когда обои стали видны после приложения — старые наблюдения лаунчера не в счёт. */
         private long visibleSince;
         private long lastHomeStart;
-        // Опрос экрана лаунчера, пока ждём рабочего стола.
         /**
-         * Пока ждём рабочего стола, опрашиваем экран лаунчера раз в HOME_PROBE_MS — так
-         * рабочий стол виден сразу, не дожидаясь событий лаунчера.
+         * После возврата из приложения раз в HOME_PROBE_MS смотрим экран лаунчера, пока не
+         * станет ясно: рабочий стол — видео играет дальше; список недавних (или лаунчер без
+         * рабочего стола) — пауза. События лаунчера приходят только после анимации, опрос
+         * видит его раньше.
          */
         private final Runnable probeLoop = new Runnable() {
             @Override
             public void run() {
                 RecentsDetectorService detector = RecentsDetectorService.instance;
-                if (!pendingHome || !visible || detector == null) return;
+                if (!recentsWatch || !visible || detector == null) return;
                 long now = SystemClock.uptimeMillis();
-                if (detector.probe() == LauncherState.HOME) {
-                    pendingHome = false;
-                    log("рабочий стол через " + (now - visibleSince) + "мс (признак «"
-                            + detector.lastMarker + "»)");
-                    startFromHome();
+                int seen = detector.probe();
+                if (seen == LauncherState.HOME) {
+                    recentsWatch = false;
+                    log("рабочий стол через " + (now - visibleSince) + "мс");
                     return;
                 }
-                if (now - visibleSince < 5000) handler.postDelayed(this, HOME_PROBE_MS);
+                if (seen == LauncherState.RECENTS || seen == LauncherState.OTHER) {
+                    pauseForRecents("через " + (now - visibleSince) + "мс, признак «"
+                            + detector.lastMarker + "»");
+                    return;
+                }
+                if (now - visibleSince < HOME_PROBE_LIMIT_MS) {
+                    handler.postDelayed(this, HOME_PROBE_MS);
+                } else {
+                    recentsWatch = false;
+                }
             }
         };
 
@@ -330,10 +306,6 @@ public class VideoWallpaperService extends WallpaperService {
             loadConfig();
             unlocked = unlockedNow();
             keyguardGone = isPreview() || !keyguard.isKeyguardLocked();
-            displayManager = context.getSystemService(DisplayManager.class);
-            if (displayManager != null) {
-                displayManager.registerDisplayListener(displayListener, handler);
-            }
             sensorManager = context.getSystemService(SensorManager.class);
             gyroscope = sensorManager == null ? null
                     : sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
@@ -352,7 +324,6 @@ public class VideoWallpaperService extends WallpaperService {
             handler.removeCallbacksAndMessages(null);
             cancelUnlockZoom();
             setGyroscope(false);
-            if (displayManager != null) displayManager.unregisterDisplayListener(displayListener);
             sp.unregisterOnSharedPreferenceChangeListener(this);
             LauncherState.removeListener(this);
             VideoWallpaperService.this.unregisterReceiver(screenReceiver);
@@ -391,7 +362,8 @@ public class VideoWallpaperService extends WallpaperService {
             if (!isVisible) {
                 handler.removeCallbacks(unlockWatch);
                 setGyroscope(false);
-                pendingHome = false;
+                recentsWatch = false;
+                pausedInRecents = false;
                 hiddenByApp = power.isInteractive() && unlocked;
                 if (!power.isInteractive()) goingOff("обои скрыты при гаснущем экране");
                 pauseAll();
@@ -411,23 +383,15 @@ public class VideoWallpaperService extends WallpaperService {
             setGyroscope(cfg.parallax > 0);
             // Появился экран блокировки — масштаб плавно возвращается к его состоянию.
             if (!unlocked) animateUnlockZoom(lockScale(), lockZoomDuration());
-            if (backFromApp && cfg.startOnHome && !isPreview() && !cfg.startInRecents
-                    && LauncherState.serviceRunning()) {
-                // Служба специальных возможностей видит экран лаунчера: запускаем, только
-                // когда после появления обоев она увидит рабочий стол (а не список недавних;
-                // при лёгком сворачивании лаунчер вообще не показывается).
-                pendingHome = true;
-                visibleSince = SystemClock.uptimeMillis();
-                log("ждём рабочего стола");
-                handler.removeCallbacks(probeLoop);
-                handler.post(probeLoop);
-            } else if (backFromApp && cfg.startOnHome && !isPreview()) {
-                if (cfg.startInRecents || !zoomReported || launcherZoom < HOME_ZOOM_THRESHOLD) {
-                    startFromHome();
-                } else {
-                    // Обои видны, но обои ещё отдалены — это список недавних приложений.
-                    pendingHome = true;
-                    log("ждём перехода на рабочий стол (отдаление " + launcherZoom + ")");
+            if (backFromApp && cfg.startOnHome && !isPreview()) {
+                // Старт сразу, как только приложение начало закрываться. Если служба видит
+                // экран лаунчера — следим, не список ли это недавних (тогда пауза).
+                startFromHome();
+                if (!cfg.startInRecents && LauncherState.serviceRunning()) {
+                    recentsWatch = true;
+                    visibleSince = SystemClock.uptimeMillis();
+                    handler.removeCallbacks(probeLoop);
+                    handler.postDelayed(probeLoop, HOME_PROBE_MS);
                 }
             } else if (!unlocked && needReverse) {
                 startReverse();
@@ -442,6 +406,7 @@ public class VideoWallpaperService extends WallpaperService {
          */
         private void startFromHome() {
             preparedForHome = false;
+            pausedInRecents = false;
             long now = SystemClock.uptimeMillis();
             if (phase == PHASE_PLAYING && now - lastHomeStart < 1500) {
                 log("возврат на рабочий стол: видео уже идёт, продолжаем");
@@ -453,64 +418,40 @@ public class VideoWallpaperService extends WallpaperService {
             triggerForward(true);
         }
 
-        /** Служба специальных возможностей сообщила, что теперь на экране. */
+        /** Служба специальных возможностей сообщила, что теперь на экране лаунчера. */
         @Override
         public void onLauncherState(int state) {
-            if (pendingHome && visible && state == LauncherState.HOME
-                    && LauncherState.changedAt() >= visibleSince) {
-                pendingHome = false;
-                startFromHome();
+            if (!visible) return;
+            if (state == LauncherState.HOME && pausedInRecents) {
+                // Из списка недавних — на рабочий стол: продолжаем с того же кадра.
+                pausedInRecents = false;
+                log("из списка недавних на рабочий стол — продолжаем");
+                resume();
+            } else if (state == LauncherState.RECENTS && recentsWatch) {
+                pauseForRecents("по событию лаунчера");
             }
         }
 
-        /** Команды от лаунчера — пишем в журнал, чтобы найти сигнал «список недавних». */
+        /** Открыт список недавних — видео на паузу до рабочего стола. */
+        private void pauseForRecents(String why) {
+            recentsWatch = false;
+            pausedInRecents = true;
+            handler.removeCallbacks(probeLoop);
+            if (forward != null && forwardReady && forward.isPlaying()) forward.pause();
+            log("список недавних — пауза (" + why + ")");
+        }
+
+        /** Команды системы: о засыпании Samsung сообщает раньше события выключения экрана. */
         @Override
         public android.os.Bundle onCommand(String action, int x, int y, int z,
                                            android.os.Bundle extras, boolean resultRequested) {
-            StringBuilder text = new StringBuilder("команда лаунчера: ").append(action);
-            if (extras != null && !extras.isEmpty()) {
-                text.append(" ").append(extras.keySet());
+            if ("android.wallpaper.goingtosleep".equals(action)) {
+                goingOff("команда засыпания");
+            } else if ("android.wallpaper.wakingup".equals(action)) {
+                // Засыпание могло не состояться (экран сразу включили) — следующее учтём.
+                screenOffHandled = false;
             }
-            log(text.toString());
-            // Samsung сообщает о засыпании раньше системного события — начинаем переход к AOD.
-            if ("android.wallpaper.goingtosleep".equals(action)) goingOff("команда засыпания");
             return null;
-        }
-
-        private float lastOffsetX = -1f;
-        private float lastOffsetY = -1f;
-
-        /** Смещения от лаунчера (страницы рабочего стола и т.п.) — тоже в журнал. */
-        @Override
-        public void onOffsetsChanged(float xOffset, float yOffset, float xOffsetStep,
-                                     float yOffsetStep, int xPixelOffset, int yPixelOffset) {
-            if (Math.abs(xOffset - lastOffsetX) < 0.01f && Math.abs(yOffset - lastOffsetY) < 0.01f) {
-                return;
-            }
-            lastOffsetX = xOffset;
-            lastOffsetY = yOffset;
-            log(String.format(java.util.Locale.ROOT, "смещение от лаунчера: x=%.2f y=%.2f",
-                    xOffset, yOffset));
-        }
-
-        /**
-         * Лаунчер сообщает, насколько отдалены обои. Масштабирует их система сама,
-         * здесь это нужно только чтобы отличить список недавних от рабочего стола.
-         */
-        @Override
-        public void onZoomChanged(float zoom) {
-            launcherZoom = zoom;
-            if (zoom > 0.01f) zoomReported = true;
-            int bucket = zoom < 0.05f ? 0 : zoom < HOME_ZOOM_THRESHOLD ? 1 : zoom < 0.95f ? 2 : 3;
-            if (bucket != zoomBucket) {
-                zoomBucket = bucket;
-                log("отдаление " + String.format(java.util.Locale.ROOT, "%.2f", zoom));
-            }
-            if (pendingHome && visible && zoom < HOME_ZOOM_THRESHOLD) {
-                pendingHome = false;
-                log("переход на рабочий стол");
-                triggerForward(true);
-            }
         }
 
         private void onScreenOff() {
@@ -537,7 +478,8 @@ public class VideoWallpaperService extends WallpaperService {
             sampleOnWake = true;
             handler.removeCallbacks(unlockWatch);
             hiddenByApp = false;
-            pendingHome = false; // ожидание рабочего стола не переживает сон
+            recentsWatch = false; // ожидание рабочего стола не переживает сон
+            pausedInRecents = false;
             if (preparedForHome) {
                 // Блокировка прямо из приложения: незаметно возвращаем прежний кадр,
                 // чтобы AOD и реверс шли от него, как раньше.
@@ -700,16 +642,6 @@ public class VideoWallpaperService extends WallpaperService {
             reverseAvailable = reverseUsable(cfg);
             lastFrameMs = cfg.reverseLastMs;
             finishedForever = !isPreview() && cfg.once && cfg.finished;
-        }
-
-        private String displayStateName(int state) {
-            switch (state) {
-                case Display.STATE_ON: return "включён";
-                case Display.STATE_OFF: return "выключен";
-                case Display.STATE_DOZE: return "AOD";
-                case Display.STATE_DOZE_SUSPEND: return "AOD (сон)";
-                default: return "состояние " + state;
-            }
         }
 
         private boolean reverseUsable(Prefs prefs) {
@@ -905,6 +837,7 @@ public class VideoWallpaperService extends WallpaperService {
         /** Играть вперёд, если всё позволяет. */
         private void resume() {
             if (forward == null || !forwardReady || reversing || phase == PHASE_DONE) return;
+            if (pausedInRecents) return;
             if (!canPlayForward()) return;
             if (phase == PHASE_WAITING) {
                 if (!armed) return;

@@ -136,8 +136,8 @@ public class RecentsDetectorService extends AccessibilityService {
             return;
         }
         int seen = classify(root);
-        if (seen == LauncherState.RECENTS) {
-            set(LauncherState.RECENTS, "признак «" + lastMarker + "»");
+        if (seen == LauncherState.RECENTS || seen == LauncherState.OTHER) {
+            set(seen, "признак «" + lastMarker + "»");
             return;
         }
         set(LauncherState.HOME, seen == LauncherState.HOME ? "признак «" + lastMarker + "»"
@@ -159,7 +159,7 @@ public class RecentsDetectorService extends AccessibilityService {
             handler.removeCallbacks(confirmHome);
             set(seen, "признак «" + lastMarker + "»");
         } else if (homeCandidateAt == 0) {
-            // Признаков нет (например, список всех приложений) — считаем рабочим столом,
+            // Ни одного признака (неизвестный экран лаунчера) — считаем рабочим столом,
             // только если признаки списка недавних так и не появятся.
             homeCandidateAt = lastContentCheck;
             handler.postDelayed(confirmHome, HOME_CONFIRM_MS);
@@ -188,44 +188,51 @@ public class RecentsDetectorService extends AccessibilityService {
         ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
         int visited = 0;
-        String homeMarker = null;
+        String hiddenHome = null;
         while (!queue.isEmpty() && visited < MAX_NODES) {
             AccessibilityNodeInfo node = queue.poll();
             visited++;
-            if (node.isVisibleToUser()) {
-                String id = node.getViewIdResourceName();
-                if (id != null) {
-                    String name = id.substring(id.indexOf('/') + 1);
-                    if (RECENTS_IDS.contains(name)) {
+            boolean visible = node.isVisibleToUser();
+            String id = node.getViewIdResourceName();
+            if (id != null) {
+                String name = id.substring(id.indexOf('/') + 1);
+                if (visible && RECENTS_IDS.contains(name)) {
+                    lastMarker = name;
+                    return LauncherState.RECENTS;
+                }
+                if (HOME_IDS.contains(name)) {
+                    // Элементы рабочего стола стоят в начале дерева: виден — это рабочий стол
+                    // (в списке недавних он скрыт), дальше обходить незачем.
+                    if (visible) {
                         lastMarker = name;
-                        return LauncherState.RECENTS;
+                        return LauncherState.HOME;
                     }
-                    if (homeMarker == null && HOME_IDS.contains(name)) homeMarker = name;
+                    if (hiddenHome == null) hiddenHome = name;
                 }
-                String text = textOf(node);
-                if (text != null) {
-                    for (String marker : RECENTS_TEXTS) {
-                        if (text.contains(marker)) {
-                            lastMarker = marker;
-                            return LauncherState.RECENTS;
-                        }
-                    }
-                }
+            }
+            if (visible && isRecentsText(node.getText())) {
+                lastMarker = String.valueOf(node.getText());
+                return LauncherState.RECENTS;
             }
             for (int i = 0; i < node.getChildCount(); i++) {
                 AccessibilityNodeInfo child = node.getChild(i);
                 if (child != null) queue.add(child);
             }
         }
-        lastMarker = homeMarker;
-        return homeMarker != null ? LauncherState.HOME : LauncherState.UNKNOWN;
+        lastMarker = hiddenHome != null ? hiddenHome + " скрыт" : null;
+        return hiddenHome != null ? LauncherState.OTHER : LauncherState.UNKNOWN;
     }
 
-    private static String textOf(AccessibilityNodeInfo node) {
-        CharSequence text = node.getText();
-        if (text == null) text = node.getContentDescription();
-        return text == null ? null : text.toString().toLowerCase(Locale.forLanguageTag("ru"));
+    /** Текстовый признак списка недавних — только для коротких надписей, без лишних строк. */
+    private static boolean isRecentsText(CharSequence text) {
+        if (text == null || text.length() == 0 || text.length() > 40) return false;
+        String lower = text.toString().toLowerCase(Locale.ROOT);
+        for (String marker : RECENTS_TEXTS) {
+            if (lower.contains(marker)) return true;
+        }
+        return false;
     }
+
 
     private String findLauncherPackage() {
         Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
