@@ -14,6 +14,7 @@ import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.media.AudioAttributes;
+import android.graphics.Color;
 import android.media.MediaPlayer;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -115,14 +116,16 @@ public class VideoWallpaperService extends WallpaperService {
         private KeyguardManager keyguard;
         private WallpaperRenderer renderer;
 
-        /** Оригинал — для воспроизведения вперёд. */
-        private MediaPlayer forward;
+        /** Вперёд: оригинал видео или сцена «Стекло». */
+        private Clip forward;
         private boolean forwardReady;
-        /** Обратное видео — только для перемотки назад. */
-        private MediaPlayer backward;
+        /** Назад: обратное видео или та же сцена задом наперёд — только для возврата. */
+        private Clip backward;
         private boolean backwardReady;
-        /** Есть готовое обратное видео и реверс выбран в настройках. */
+        /** Реверс выбран в настройках и готов (у видео — обратный файл, у сцены — всегда). */
         private boolean reverseAvailable;
+        /** Режим «Стекло»: сцена из кода вместо видео. */
+        private boolean glass;
         /** Последний кадр оригинала; позиция r в обратном видео = lastFrameMs - r вперёд. */
         private int lastFrameMs;
 
@@ -384,6 +387,9 @@ public class VideoWallpaperService extends WallpaperService {
             surfaceHeight = height;
             if (renderer == null) {
                 renderer = WallpaperRenderer.create(holder.getSurface(), width, height);
+                if (renderer != null) {
+                    renderer.setErrorListener(message -> handler.post(() -> log(message)));
+                }
                 if (isPreview()) {
                     log("превью: поверхность " + width + "×" + height + ", флаги "
                             + getWallpaperFlags());
@@ -675,10 +681,20 @@ public class VideoWallpaperService extends WallpaperService {
             if (Prefs.KEY_REVISION.equals(key)) {
                 // Новые настройки, текущее воспроизведение сохраняем. Плееры пересоздаём,
                 // только если поменялось, есть ли обратное видео.
-                boolean hadReverse = reverseAvailable;
-                boolean nextReverse = reverseUsable(Prefs.load(VideoWallpaperService.this));
-                if (nextReverse != hadReverse) closePlayers();
+                Prefs next = Prefs.load(VideoWallpaperService.this);
+                boolean sourceChanged = next.source != cfg.source;
+                if (sourceChanged || reverseFor(next) != reverseAvailable
+                        || (next.glass() && next.glassDurationMs != cfg.glassDurationMs)) {
+                    closePlayers();
+                }
+                if (sourceChanged) {
+                    // Другой источник — с кадра покоя, без запуска.
+                    positionMs = 0;
+                    needReverse = false;
+                    if (phase == PHASE_PLAYING) phase = PHASE_WAITING;
+                }
                 loadConfig();
+                if (renderer != null) renderer.setScene(glass ? cfg.glassPalette : -1);
                 log("настройки обновлены, реверс " + (reverseAvailable ? "готов" : "недоступен"));
                 if (finishedForever) phase = PHASE_DONE;
                 if (needReverse && !reverseAvailable) {
@@ -688,16 +704,17 @@ public class VideoWallpaperService extends WallpaperService {
                 if (forward == null) {
                     openPlayers();
                 } else {
-                    float volume = cfg.sound ? 1f : 0f;
-                    forward.setVolume(volume, volume);
+                    forward.setVolume(cfg.sound ? 1f : 0f);
                     forward.setLooping(cfg.infinite());
                 }
                 cancelUnlockZoom();
                 unlockScale = unlocked ? homeScale() : lockScale();
                 setGyroscope(visible && cfg.parallax > 0);
                 applyTransform();
-                // Кадр покоя сменился — пересчитать цвета для системы.
-                if (colorsAtEnd == null || colorsAtEnd != restAtEnd()) loadStill(false);
+                // Кадр покоя или источник сменился — пересчитать цвета для системы.
+                if (glass || sourceChanged || colorsAtEnd == null || colorsAtEnd != restAtEnd()) {
+                    loadStill(sourceChanged);
+                }
             } else if (Prefs.KEY_PLAY_NOW.equals(key)) {
                 // «Проиграть сейчас» или новое видео: с начала, как только обои станут видны.
                 closePlayers();
@@ -731,6 +748,35 @@ public class VideoWallpaperService extends WallpaperService {
          */
         private void loadStill(boolean show) {
             WallpaperRenderer target = renderer;
+            if (glass) {
+                // Сцена рисуется сразу; в превью — неподвижный кадр покоя.
+                stillRequest++;
+                if (target != null) {
+                    target.setScene(cfg.glassPalette);
+                    if (isPreview()) {
+                        float rest = restAtEnd() ? 1f : 0f;
+                        target.setSceneSource(WallpaperRenderer.SOURCE_FORWARD,
+                                new WallpaperRenderer.SceneSource() {
+                                    @Override
+                                    public float progress() {
+                                        return rest;
+                                    }
+
+                                    @Override
+                                    public boolean animating() {
+                                        return false;
+                                    }
+                                });
+                    }
+                }
+                int[] tones = GlassScene.colors(cfg.glassPalette);
+                colors = new WallpaperColors(Color.valueOf(tones[0]), Color.valueOf(tones[1]),
+                        Color.valueOf(tones[2]));
+                colorsAtEnd = null;
+                notifyColorsChanged();
+                return;
+            }
+            if (target != null) target.setScene(-1);
             boolean restEnd = restAtEnd();
             // Превью — кадр покоя; обои — кадр, с которого пойдёт видео.
             boolean showEnd = isPreview() ? restEnd : positionMs == AT_END;
@@ -784,9 +830,16 @@ public class VideoWallpaperService extends WallpaperService {
         private void loadConfig() {
             Context context = VideoWallpaperService.this;
             cfg = Prefs.load(context);
-            reverseAvailable = reverseUsable(cfg);
-            lastFrameMs = cfg.reverseLastMs;
+            glass = cfg.glass();
+            reverseAvailable = reverseFor(cfg);
+            // Позиция r назад = lastFrameMs − r вперёд; у сцены назад та же длительность.
+            lastFrameMs = glass ? cfg.glassDurationMs : cfg.reverseLastMs;
             finishedForever = !isPreview() && cfg.once && cfg.finished;
+        }
+
+        /** Будет ли реверс с такими настройками. */
+        private boolean reverseFor(Prefs prefs) {
+            return prefs.glass() ? prefs.wantsReverse() : reverseUsable(prefs);
         }
 
         private boolean reverseUsable(Prefs prefs) {
@@ -1027,7 +1080,7 @@ public class VideoWallpaperService extends WallpaperService {
             renderer.showSource(WallpaperRenderer.SOURCE_FORWARD);
         }
 
-        private void onBackwardCompleted(MediaPlayer mp) {
+        private void onBackwardCompleted(Clip mp) {
             if (mp != backward || !reversing) return;
             log("■ реверс доиграл до начала");
             reversing = false;
@@ -1035,7 +1088,7 @@ public class VideoWallpaperService extends WallpaperService {
             renderer.showSource(WallpaperRenderer.SOURCE_FORWARD);
         }
 
-        private void onForwardCompleted(MediaPlayer mp) {
+        private void onForwardCompleted(Clip mp) {
             if (mp != forward || cfg.infinite()) return;
             log("■ видео доиграло до конца");
             if (aodForward) {
@@ -1085,7 +1138,7 @@ public class VideoWallpaperService extends WallpaperService {
 
         private int forwardEndMs() {
             if (forward != null && forwardReady && forward.getDuration() > 0) {
-                return Math.max(0, forward.getDuration() - 50);
+                return Math.max(0, forward.getDuration() - forward.endOffsetMs());
             }
             return lastFrameMs;
         }
@@ -1099,8 +1152,8 @@ public class VideoWallpaperService extends WallpaperService {
             return Math.max(0, Math.min(lastFrameMs, position));
         }
 
-        private void seek(MediaPlayer mp, int positionMs) {
-            mp.seekTo(positionMs, MediaPlayer.SEEK_CLOSEST);
+        private void seek(Clip mp, int positionMs) {
+            mp.seekTo(positionMs);
         }
 
         // ---- Плееры ----
@@ -1109,9 +1162,17 @@ public class VideoWallpaperService extends WallpaperService {
             // Превью — только неподвижный кадр: декодеры видео не занимаем, батарею не тратим.
             if (isPreview() || renderer == null || forward != null) return;
             Context context = VideoWallpaperService.this;
-            File video = Prefs.videoFile(context);
-            if (!video.isFile()) return;
-            forward = createPlayer(video, WallpaperRenderer.SOURCE_FORWARD, cfg.sound);
+            if (glass) {
+                forward = sceneClip(false, WallpaperRenderer.SOURCE_FORWARD);
+                backward = reverseAvailable ? sceneClip(true, WallpaperRenderer.SOURCE_REVERSE)
+                        : null;
+            } else {
+                File video = Prefs.videoFile(context);
+                if (!video.isFile()) return;
+                forward = createPlayer(video, WallpaperRenderer.SOURCE_FORWARD, cfg.sound);
+                backward = reverseAvailable ? createPlayer(Prefs.reverseFile(context),
+                        WallpaperRenderer.SOURCE_REVERSE, false) : null;
+            }
             if (forward != null) {
                 forward.setLooping(cfg.infinite());
                 forward.setOnPreparedListener(mp -> {
@@ -1128,23 +1189,31 @@ public class VideoWallpaperService extends WallpaperService {
                 forward.setOnCompletionListener(this::onForwardCompleted);
                 forward.prepareAsync();
             }
-            if (reverseAvailable) {
-                backward = createPlayer(Prefs.reverseFile(context),
-                        WallpaperRenderer.SOURCE_REVERSE, false);
-                if (backward != null) {
-                    backward.setOnPreparedListener(mp -> {
-                        if (mp != backward) return;
-                        backwardReady = true;
-                        if (visible && !unlocked && needReverse) startReverse();
-                    });
-                    backward.setOnCompletionListener(this::onBackwardCompleted);
-                    backward.prepareAsync();
-                }
+            if (backward != null) {
+                backward.setOnPreparedListener(mp -> {
+                    if (mp != backward) return;
+                    backwardReady = true;
+                    if (visible && !unlocked && needReverse) startReverse();
+                });
+                backward.setOnCompletionListener(this::onBackwardCompleted);
+                backward.prepareAsync();
             }
         }
 
-        private MediaPlayer createPlayer(File file, int source, boolean sound) {
+        /** Часы сцены «Стекло» для источника; рендер рисует по ним кадры. */
+        private Clip sceneClip(boolean reversed, int source) {
+            SceneClip clip = new SceneClip(cfg.glassDurationMs, reversed);
+            clip.setOnChange(() -> {
+                if (renderer != null) renderer.requestSceneFrame();
+            });
+            renderer.setScene(cfg.glassPalette);
+            renderer.setSceneSource(source, clip);
+            return clip;
+        }
+
+        private Clip createPlayer(File file, int source, boolean sound) {
             MediaPlayer mp = new MediaPlayer();
+            VideoClip clip = new VideoClip(mp);
             try {
                 mp.setSurface(renderer.videoSurface(source));
                 mp.setDataSource(file.getAbsolutePath());
@@ -1161,7 +1230,7 @@ public class VideoWallpaperService extends WallpaperService {
                     Log.w(TAG, "MediaPlayer error " + what + "/" + extra + " source " + source);
                     log("ошибка плеера " + (source == WallpaperRenderer.SOURCE_REVERSE
                             ? "реверса" : "видео") + ": " + what + "/" + extra);
-                    if (p == backward) {
+                    if (clip == backward) {
                         // Без реверса обойдёмся — возвращаем к началу мгновенно.
                         reversing = false;
                         reverseAvailable = false;
@@ -1170,12 +1239,12 @@ public class VideoWallpaperService extends WallpaperService {
                         if (renderer != null) {
                             renderer.showSource(WallpaperRenderer.SOURCE_FORWARD);
                         }
-                    } else if (p == forward) {
+                    } else if (clip == forward) {
                         closePlayers();
                     }
                     return true;
                 });
-                return mp;
+                return clip;
             } catch (Exception e) {
                 Log.w(TAG, "Cannot open video", e);
                 mp.release();

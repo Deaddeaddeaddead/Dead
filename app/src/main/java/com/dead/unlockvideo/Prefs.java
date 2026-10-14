@@ -34,6 +34,10 @@ final class Prefs {
     static final String KEY_ZOOM_DURATION = "zoom_duration";
     // Дополнительно
     static final String KEY_SOUND = "sound";
+    // Источник: видео или сцена «Стекло»
+    static final String KEY_SOURCE = "source";
+    static final String KEY_GLASS_PALETTE = "glass_palette";
+    static final String KEY_GLASS_DURATION = "glass_duration";
 
     static final String KEY_VIDEO_NAME = "video_name";
     /** Меняется при каждом новом видео — чтобы не принять реверс от старого. */
@@ -74,6 +78,13 @@ final class Prefs {
     static final int MIN_ZOOM_DURATION = 1;
     static final int MAX_ZOOM_DURATION = 40;
 
+    static final int SOURCE_VIDEO = 0;
+    /** Сцена «Стекло», нарисованная кодом. */
+    static final int SOURCE_GLASS = 1;
+    /** Длительность анимации стекла — в десятых долях секунды. */
+    static final int MIN_GLASS_DURATION = 5;
+    static final int MAX_GLASS_DURATION = 60;
+
     final boolean startOnUnlock;
     final boolean startOnScreenOn;
     /** Считать разблокировкой подтверждение личности прямо на экране блокировки (лицом). */
@@ -98,6 +109,12 @@ final class Prefs {
     /** Сила параллакса, 0 — выключен. */
     final int parallax;
     final boolean sound;
+    /** SOURCE_*. */
+    final int source;
+    /** Палитра стекла: GlassScene.PALETTE_*. */
+    final int glassPalette;
+    /** Длительность анимации стекла, мс. */
+    final int glassDurationMs;
     final boolean reverseReady;
     final int reverseLastMs;
     final boolean finished;
@@ -127,6 +144,11 @@ final class Prefs {
         zoomDurationMs = 100 * Math.max(MIN_ZOOM_DURATION, Math.min(MAX_ZOOM_DURATION,
                 sp.getInt(KEY_ZOOM_DURATION, 7)));
         sound = sp.getBoolean(KEY_SOUND, false);
+        source = sp.getInt(KEY_SOURCE, SOURCE_VIDEO) == SOURCE_GLASS ? SOURCE_GLASS : SOURCE_VIDEO;
+        glassPalette = Math.max(GlassScene.PALETTE_AMBER, Math.min(GlassScene.PALETTE_EMERALD,
+                sp.getInt(KEY_GLASS_PALETTE, GlassScene.PALETTE_AMBER)));
+        glassDurationMs = 100 * Math.max(MIN_GLASS_DURATION, Math.min(MAX_GLASS_DURATION,
+                sp.getInt(KEY_GLASS_DURATION, 20)));
         reverseReady = sp.getBoolean(KEY_REVERSE_READY, false)
                 && sp.getInt(KEY_REVERSE_FORMAT, 1) == REVERSE_FORMAT;
         reverseLastMs = sp.getInt(KEY_REVERSE_LAST_MS, 0);
@@ -135,6 +157,10 @@ final class Prefs {
 
     boolean infinite() {
         return plays == INFINITE;
+    }
+
+    boolean glass() {
+        return source == SOURCE_GLASS;
     }
 
     /** Нужно ли обратное видео: реверс выбран и повтор не бесконечный. */

@@ -5,6 +5,7 @@ import android.graphics.SurfaceTexture;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.util.Log;
+import android.view.Choreographer;
 import android.view.Surface;
 
 import java.util.concurrent.CountDownLatch;
@@ -16,7 +17,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * под экран, масштабирует и сдвигает его (эффекты). Источников два — оригинал и обратное видео, на экран
  * выводится один; переключение происходит, когда у нового источника появляется кадр,
  * чтобы не мигнуть устаревшей картинкой. Пока у видео нет кадра, показывается неподвижный
- * кадр-картинка (если задан).
+ * кадр-картинка (если задан). В режиме «Стекло» вместо видео рисуется сцена (GlassScene):
+ * кадр по ходу её часов, покадрово, только пока она движется.
  */
 final class WallpaperRenderer {
     private static final String TAG = "WallpaperRenderer";
@@ -53,6 +55,36 @@ final class WallpaperRenderer {
     private int stillHeight;
     /** Обрезка под экран: доля кадра по X и Y, левый нижний угол. */
     private final float[] crop = new float[4];
+
+    /** Ход анимации сцены для источника — читается потоком рендера. */
+    interface SceneSource {
+        /** 0..1 — кадр сцены. */
+        float progress();
+
+        /** Сцена движется — нужны новые кадры. */
+        boolean animating();
+    }
+
+    /** Сообщения об ошибках рендера — в журнал обоев (вызывается на потоке рендера). */
+    interface ErrorListener {
+        void onError(String message);
+    }
+
+    private volatile ErrorListener errorListener;
+
+    void setErrorListener(ErrorListener listener) {
+        errorListener = listener;
+    }
+
+    /** Палитра сцены; -1 — режим видео. */
+    private int scenePalette = -1;
+    private GlassScene scene;
+    private final SceneSource[] sceneSources = new SceneSource[2];
+    private Choreographer choreographer;
+    private boolean frameScheduled;
+    private final Choreographer.FrameCallback sceneFrame = time -> sceneTick();
+    /** На AOD кадры экрана идут редко или не идут — тогда рисуем по таймеру. */
+    private final Runnable sceneFrameFallback = this::sceneTick;
 
     private final Runnable forceSwitch = () -> {
         if (pending >= 0) {
@@ -158,6 +190,14 @@ final class WallpaperRenderer {
     /** Показать источник, как только у него появится свежий кадр. */
     void showSource(int source) {
         handler.post(() -> {
+            if (scenePalette >= 0) {
+                // У сцены кадр есть всегда — переключаемся сразу.
+                active = source;
+                pending = -1;
+                handler.removeCallbacks(forceSwitch);
+                drawScene();
+                return;
+            }
             if (source == active) {
                 if (pending >= 0) {
                     handler.removeCallbacks(forceSwitch);
@@ -225,6 +265,51 @@ final class WallpaperRenderer {
         stillTexture = 0;
     }
 
+    /** Режим «Стекло» с палитрой palette; -1 — обратно к видео. */
+    void setScene(int palette) {
+        handler.post(() -> {
+            if (scenePalette == palette) return;
+            scenePalette = palette;
+            draw();
+        });
+    }
+
+    /** Часы сцены для источника (вперёд или назад). null — убрать. */
+    void setSceneSource(int source, SceneSource clock) {
+        handler.post(() -> {
+            sceneSources[source] = clock;
+            if (source == active) drawScene();
+        });
+    }
+
+    /** Ход сцены изменился (пуск, пауза, перемотка) — новый кадр и, если движется, следующие. */
+    void requestSceneFrame() {
+        handler.post(this::drawScene);
+    }
+
+    private void drawScene() {
+        if (scenePalette < 0) return;
+        draw();
+        SceneSource source = sceneSources[active];
+        if (source != null && source.animating()) scheduleSceneFrame();
+    }
+
+    private void scheduleSceneFrame() {
+        if (frameScheduled) return;
+        frameScheduled = true;
+        if (choreographer == null) choreographer = Choreographer.getInstance();
+        choreographer.postFrameCallback(sceneFrame);
+        handler.postDelayed(sceneFrameFallback, 50);
+    }
+
+    private void sceneTick() {
+        if (!frameScheduled) return;
+        frameScheduled = false;
+        choreographer.removeFrameCallback(sceneFrame);
+        handler.removeCallbacks(sceneFrameFallback);
+        drawScene();
+    }
+
     void setVideoSize(int source, int width, int height) {
         handler.post(() -> {
             Input input = inputs[source];
@@ -239,6 +324,9 @@ final class WallpaperRenderer {
         CountDownLatch done = new CountDownLatch(1);
         boolean posted = handler.post(() -> {
             handler.removeCallbacks(forceSwitch);
+            handler.removeCallbacks(sceneFrameFallback);
+            if (choreographer != null) choreographer.removeFrameCallback(sceneFrame);
+            frameScheduled = false;
             for (int i = 0; i < inputs.length; i++) {
                 if (inputs[i] != null) inputs[i].release();
                 inputs[i] = null;
@@ -259,6 +347,27 @@ final class WallpaperRenderer {
 
     private void draw() {
         if (egl == null || viewWidth <= 0 || viewHeight <= 0) return;
+        if (scenePalette >= 0) {
+            SceneSource source = sceneSources[active];
+            if (source == null) source = sceneSources[SOURCE_FORWARD];
+            if (source == null) return;
+            if (scene == null) {
+                try {
+                    scene = new GlassScene();
+                } catch (java.io.IOException e) {
+                    Log.w(TAG, "scene shader failed", e);
+                    ErrorListener listener = errorListener;
+                    if (listener != null) listener.onError("сцена не запустилась: " + e.getMessage());
+                    scenePalette = -1;
+                    return;
+                }
+            }
+            deleteStill();
+            computeCrop(GlassScene.FRAME_WIDTH, GlassScene.FRAME_HEIGHT);
+            scene.draw(viewWidth, viewHeight, crop, source.progress(), scenePalette);
+            egl.swap(-1);
+            return;
+        }
         Input input = inputs[active];
         if (input != null && input.hasFrame) {
             // Видео пошло — картинка больше не нужна.

@@ -18,6 +18,7 @@ import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Shader;
+import android.graphics.SurfaceTexture;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.LayerDrawable;
@@ -29,6 +30,8 @@ import android.os.Looper;
 import android.provider.OpenableColumns;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.Surface;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.accessibility.AccessibilityManager;
@@ -74,6 +77,7 @@ public class MainActivity extends Activity {
             "Увеличивается после разблокировки",
             "Увеличено на блокировке, после разблокировки — как обычно"};
     private static final String[] ZOOM_SPEED_TEXT = {"Вместе с видео или реверсом", null};
+    private static final String[] SOURCE_TEXT = {"Ваш ролик", "Стеклянные капсулы — рисуются на телефоне"};
 
     private SharedPreferences sp;
     private final Map<String, Switch> switches = new HashMap<>();
@@ -81,6 +85,16 @@ public class MainActivity extends Activity {
     private TextView thumbnailHint;
     private TextView videoName;
     private Button pickButton;
+    /** Режим «Стекло»: сцена из кода вместо видео. */
+    private boolean glass;
+    private Segmented sourceChoice;
+    private LinearLayout videoGroup;
+    private LinearLayout glassGroup;
+    private int glassPalette;
+    private int glassDurationMs;
+    /** Живое превью сцены в приложении. */
+    private WallpaperRenderer glassRenderer;
+    private SceneClip glassClip;
     private Button setButton;
     private TextView heroTitle;
     private TextView heroSubtitle;
@@ -159,9 +173,70 @@ public class MainActivity extends Activity {
         root.addView(hero, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        // Что показывать
+        glass = cfg.glass();
+        glassPalette = cfg.glassPalette;
+        glassDurationMs = cfg.glassDurationMs;
+        LinearLayout sourceIsland = island(root, "Обои");
+        sourceChoice = new Segmented(sourceIsland, "Что показывать",
+                new String[] {"Видео", "Стекло"}, glass ? 1 : 0, index -> {
+                    glass = index == 1;
+                    sp.edit().putInt(Prefs.KEY_SOURCE,
+                            glass ? Prefs.SOURCE_GLASS : Prefs.SOURCE_VIDEO).apply();
+                    Prefs.bumpRevision(this);
+                    Prefs now = Prefs.load(this);
+                    if (!glass && now.wantsReverse() && !now.reverseReady) {
+                        ensureReverse(getApplicationContext());
+                    }
+                    updateSource();
+                });
+
+        // Стекло
+        glassGroup = vertical();
+        root.addView(glassGroup);
+        LinearLayout glassIsland = island(glassGroup, "Стекло");
+        FrameLayout glassFrame = new FrameLayout(this);
+        glassFrame.setBackgroundResource(R.drawable.thumb_bg);
+        glassFrame.setClipToOutline(true);
+        TextureView glassView = new TextureView(this);
+        glassView.setOpaque(true);
+        glassView.setSurfaceTextureListener(glassPreviewListener);
+        glassFrame.addView(glassView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        TextView glassHint = text("Нажмите — проиграть", 13, R.color.text2);
+        glassHint.setTextColor(0xccffffff);
+        glassHint.setPadding(dp(14), dp(10), dp(14), dp(10));
+        glassFrame.addView(glassHint, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.END));
+        glassFrame.setOnClickListener(v -> playGlassPreview());
+        LinearLayout.LayoutParams glassParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(230));
+        glassParams.setMargins(dp(16), dp(16), dp(16), dp(16));
+        glassIsland.addView(glassFrame, glassParams);
+        new Segmented(glassIsland, "Цвет",
+                new String[] {"Янтарь", "Лёд", "Аметист", "Изумруд"}, glassPalette, index -> {
+                    glassPalette = index;
+                    sp.edit().putInt(Prefs.KEY_GLASS_PALETTE, index).apply();
+                    Prefs.bumpRevision(this);
+                    if (glassRenderer != null) glassRenderer.setScene(index);
+                });
+        sliderRow(glassIsland, "Длительность анимации", null, Prefs.MIN_GLASS_DURATION,
+                Prefs.MAX_GLASS_DURATION, glassDurationMs / 100,
+                value -> String.format(java.util.Locale.ROOT, "%.1f с", value / 10f),
+                value -> {
+                    glassDurationMs = value * 100;
+                    sp.edit().putInt(Prefs.KEY_GLASS_DURATION, value).apply();
+                    Prefs.bumpRevision(this);
+                    newGlassClip();
+                    playGlassPreview();
+                });
+
         // Видео
-        section(root, "Видео");
-        LinearLayout card = card(root);
+        videoGroup = vertical();
+        root.addView(videoGroup);
+        section(videoGroup, "Видео");
+        LinearLayout card = card(videoGroup);
         card.setPadding(dp(16), dp(16), dp(16), dp(16));
         FrameLayout preview = new FrameLayout(this);
         preview.setBackgroundResource(R.drawable.thumb_bg);
@@ -293,8 +368,10 @@ public class MainActivity extends Activity {
         updateEnabled();
         updateVideo();
         // Реверс включён, но ролик не готов или подготовлен старым способом — готовим.
-        if (cfg.wantsReverse() && !cfg.reverseReady) ensureReverse(getApplicationContext());
-        updateReverseStatus();
+        if (!glass && cfg.wantsReverse() && !cfg.reverseReady) {
+            ensureReverse(getApplicationContext());
+        }
+        updateSource();
     }
 
     @Override
@@ -327,7 +404,7 @@ public class MainActivity extends Activity {
 
     private void onLockActionChanged(int action) {
         sp.edit().putInt(Prefs.KEY_LOCK_ACTION, action).apply();
-        if (action == Prefs.LOCK_REVERSE) {
+        if (action == Prefs.LOCK_REVERSE && !glass) {
             reverseError = null;
             ensureReverse(getApplicationContext());
         }
@@ -419,6 +496,71 @@ public class MainActivity extends Activity {
         }
     }
 
+    // ---- Источник: видео или стекло ----
+
+    private void updateSource() {
+        videoGroup.setVisibility(glass ? View.GONE : View.VISIBLE);
+        glassGroup.setVisibility(glass ? View.VISIBLE : View.GONE);
+        setSubtitle(sourceChoice.item, SOURCE_TEXT[glass ? 1 : 0], R.color.text2);
+        updateVideo();
+        updateReverseStatus();
+    }
+
+    private final TextureView.SurfaceTextureListener glassPreviewListener =
+            new TextureView.SurfaceTextureListener() {
+                private Surface surface;
+
+                @Override
+                public void onSurfaceTextureAvailable(SurfaceTexture texture, int width,
+                                                      int height) {
+                    surface = new Surface(texture);
+                    glassRenderer = WallpaperRenderer.create(surface, width, height);
+                    if (glassRenderer == null) return;
+                    glassRenderer.setScene(glassPalette);
+                    newGlassClip();
+                }
+
+                @Override
+                public void onSurfaceTextureSizeChanged(SurfaceTexture texture, int width,
+                                                        int height) {
+                    if (glassRenderer != null) glassRenderer.setViewSize(width, height);
+                }
+
+                @Override
+                public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
+                    if (glassClip != null) glassClip.release();
+                    glassClip = null;
+                    if (glassRenderer != null) glassRenderer.release();
+                    glassRenderer = null;
+                    if (surface != null) surface.release();
+                    surface = null;
+                    return true;
+                }
+
+                @Override
+                public void onSurfaceTextureUpdated(SurfaceTexture texture) {
+                }
+            };
+
+    /** Часы превью с текущей длительностью; стоят в конце анимации. */
+    private void newGlassClip() {
+        if (glassRenderer == null) return;
+        if (glassClip != null) glassClip.release();
+        SceneClip clip = new SceneClip(glassDurationMs, false);
+        clip.setOnChange(() -> {
+            if (glassRenderer != null) glassRenderer.requestSceneFrame();
+        });
+        glassClip = clip;
+        glassRenderer.setSceneSource(WallpaperRenderer.SOURCE_FORWARD, clip);
+        clip.seekTo(glassDurationMs);
+    }
+
+    private void playGlassPreview() {
+        if (glassClip == null) return;
+        glassClip.seekTo(0);
+        glassClip.start();
+    }
+
     // ---- Видео ----
 
     private void updateVideo() {
@@ -427,11 +569,11 @@ public class MainActivity extends Activity {
         videoName.setVisibility(hasVideo ? View.VISIBLE : View.GONE);
         thumbnailHint.setVisibility(hasVideo ? View.GONE : View.VISIBLE);
         pickButton.setText(hasVideo ? "Выбрать другое видео" : "Выбрать видео");
-        setButton.setEnabled(hasVideo);
-        setButton.setAlpha(hasVideo ? 1f : 0.5f);
+        setButton.setEnabled(hasVideo || glass);
+        setButton.setAlpha(hasVideo || glass ? 1f : 0.5f);
         thumbnail.setImageDrawable(null);
         updateHero();
-        if (!hasVideo) return;
+        if (!hasVideo || glass) return;
 
         // Первый кадр берётся из готовых неподвижных кадров (они же — для превью обоев).
         Context app = getApplicationContext();
@@ -594,6 +736,11 @@ public class MainActivity extends Activity {
     }
 
     private void updateReverseStatus() {
+        if (glass) {
+            // Сцена играет назад сама — готовить ничего не нужно.
+            reverseBox.setVisibility(View.GONE);
+            return;
+        }
         boolean wanted = lockChoice.selected == Prefs.LOCK_REVERSE;
         boolean ready = Prefs.load(this).reverseReady;
         if (reverseRunning) {
@@ -764,7 +911,11 @@ public class MainActivity extends Activity {
 
     private void updateHero() {
         boolean hasVideo = Prefs.videoFile(this).isFile();
-        if (!hasVideo) {
+        if (glass) {
+            heroTitle.setText(wallpaperActive ? "Обои установлены" : "Стекло готово");
+            heroSubtitle.setText(wallpaperActive ? "Настройки ниже применяются сразу"
+                    : "Осталось установить его как обои");
+        } else if (!hasVideo) {
             heroTitle.setText("Выберите видео");
             heroSubtitle.setText("Оно станет живыми обоями и запустится после разблокировки");
         } else if (wallpaperActive) {
@@ -834,7 +985,7 @@ public class MainActivity extends Activity {
             bar.setPadding(dp(4), dp(4), dp(4), dp(4));
             options = new TextView[labels.length];
             for (int i = 0; i < labels.length; i++) {
-                TextView option = text(labels[i], 15, R.color.text);
+                TextView option = text(labels[i], labels.length > 3 ? 13 : 15, R.color.text);
                 option.setGravity(Gravity.CENTER);
                 option.setTypeface(Typeface.DEFAULT_BOLD);
                 option.setMaxLines(1);

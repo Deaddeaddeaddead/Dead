@@ -22,6 +22,20 @@ final class GlUtil {
     private GlUtil() {
     }
 
+    /** Собирает шейдерную программу; бросает IOException, если шейдер не собрался. */
+    static int program(String vertex, String fragment) throws IOException {
+        int program = GLES20.glCreateProgram();
+        GLES20.glAttachShader(program, FrameDrawer.shader(GLES20.GL_VERTEX_SHADER, vertex));
+        GLES20.glAttachShader(program, FrameDrawer.shader(GLES20.GL_FRAGMENT_SHADER, fragment));
+        GLES20.glLinkProgram(program);
+        int[] status = new int[1];
+        GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, status, 0);
+        if (status[0] != GLES20.GL_TRUE) {
+            throw new IOException("шейдер не собрался: " + GLES20.glGetProgramInfoLog(program));
+        }
+        return program;
+    }
+
     /** EGL-контекст, рисующий в заданную поверхность. Живёт на одном потоке. */
     static final class Egl {
         private static final int EGL_RECORDABLE_ANDROID = 0x3142;
@@ -260,13 +274,16 @@ final class GlUtil {
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         }
 
-        private static int shader(int type, String source) throws IOException {
+        static int shader(int type, String source) throws IOException {
             int shader = GLES20.glCreateShader(type);
             GLES20.glShaderSource(shader, source);
             GLES20.glCompileShader(shader);
             int[] status = new int[1];
             GLES20.glGetShaderiv(shader, GLES20.GL_COMPILE_STATUS, status, 0);
-            if (status[0] == 0) throw new IOException("шейдер не скомпилировался");
+            if (status[0] == 0) {
+                throw new IOException("шейдер не скомпилировался: "
+                        + GLES20.glGetShaderInfoLog(shader));
+            }
             return shader;
         }
 
