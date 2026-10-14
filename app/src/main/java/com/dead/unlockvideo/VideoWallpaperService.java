@@ -13,7 +13,6 @@ import android.hardware.SensorManager;
 import android.hardware.display.DisplayManager;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
-import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -83,7 +82,6 @@ public class VideoWallpaperService extends WallpaperService {
         /** Где показаны эти обои: рабочий стол, экран блокировки или превью. */
         private String where() {
             if (isPreview()) return "превью";
-            if (Build.VERSION.SDK_INT < 34) return "обои";
             int flags = getWallpaperFlags();
             boolean home = (flags & android.app.WallpaperManager.FLAG_SYSTEM) != 0;
             boolean lock = (flags & android.app.WallpaperManager.FLAG_LOCK) != 0;
@@ -300,11 +298,7 @@ public class VideoWallpaperService extends WallpaperService {
             filter.addAction(Intent.ACTION_SCREEN_OFF);
             filter.addAction(Intent.ACTION_SCREEN_ON);
             filter.addAction(Intent.ACTION_USER_PRESENT);
-            if (Build.VERSION.SDK_INT >= 33) {
-                context.registerReceiver(screenReceiver, filter, Context.RECEIVER_EXPORTED);
-            } else {
-                context.registerReceiver(screenReceiver, filter);
-            }
+            context.registerReceiver(screenReceiver, filter, Context.RECEIVER_EXPORTED);
 
             loadConfig();
             unlocked = unlockedNow();

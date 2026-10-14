@@ -194,7 +194,7 @@ public class RecentsDetectorService extends AccessibilityService {
     private static String textOf(AccessibilityNodeInfo node) {
         CharSequence text = node.getText();
         if (text == null) text = node.getContentDescription();
-        return text == null ? null : text.toString().toLowerCase(new Locale("ru"));
+        return text == null ? null : text.toString().toLowerCase(Locale.forLanguageTag("ru"));
     }
 
     private String findLauncherPackage() {

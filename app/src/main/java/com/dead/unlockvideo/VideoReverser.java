@@ -8,7 +8,6 @@ import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
 import android.media.MediaMuxer;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -133,7 +132,7 @@ final class VideoReverser {
             outFormat.setInteger(MediaFormat.KEY_BIT_RATE,
                     (int) Math.min(maxBitrate, Math.max(10_000_000L, wanted)));
             MediaCodecInfo.EncoderCapabilities encoderCaps = caps.getEncoderCapabilities();
-            if (Build.VERSION.SDK_INT >= 28 && encoderCaps.isBitrateModeSupported(
+            if (encoderCaps.isBitrateModeSupported(
                     MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CQ)) {
                 outFormat.setInteger(MediaFormat.KEY_BITRATE_MODE,
                         MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CQ);
