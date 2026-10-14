@@ -45,8 +45,8 @@ final class LauncherState {
         return changedAt;
     }
 
+    /** Новое наблюдение лаунчера; слушатели получают каждое — и повторное тоже. */
     static void set(int newState) {
-        if (newState == state) return;
         state = newState;
         changedAt = SystemClock.uptimeMillis();
         for (Listener listener : LISTENERS) listener.onLauncherState(newState);

@@ -1,6 +1,7 @@
 package com.dead.unlockvideo;
 
 import android.accessibilityservice.AccessibilityService;
+import android.accessibilityservice.AccessibilityServiceInfo;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -32,6 +33,12 @@ public class RecentsDetectorService extends AccessibilityService {
     protected void onServiceConnected() {
         super.onServiceConnected();
         launcherPackage = findLauncherPackage();
+        // События — только от лаунчера: в остальных приложениях служба не просыпается.
+        AccessibilityServiceInfo info = getServiceInfo();
+        if (info != null) {
+            info.packageNames = new String[] {launcherPackage};
+            setServiceInfo(info);
+        }
         LauncherState.setServiceRunning(true);
         EventLog.add(this, "спец. возможности: служба включена, лаунчер " + launcherPackage);
     }
@@ -55,17 +62,7 @@ public class RecentsDetectorService extends AccessibilityService {
         String packageName = pkg.toString();
         int type = event.getEventType();
 
-        if (!packageName.equals(launcherPackage)) {
-            // Шторка уведомлений, клавиатура и т.п. — не смена экрана.
-            if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
-                    || packageName.equals("com.android.systemui")
-                    || packageName.equals(getPackageName())
-                    || isInputMethod(packageName)) {
-                return;
-            }
-            set(LauncherState.APP, packageName);
-            return;
-        }
+        if (!packageName.equals(launcherPackage)) return;
 
         // Лаунчер: рабочий стол или список недавних. Изменения содержимого — не чаще,
         // чем раз в CONTENT_THROTTLE_MS.
@@ -90,8 +87,10 @@ public class RecentsDetectorService extends AccessibilityService {
     }
 
     private void set(int state, String why) {
-        if (state == LauncherState.state()) return;
-        EventLog.add(this, "спец. возможности: " + LauncherState.name(state) + " (" + why + ")");
+        if (state != LauncherState.state()) {
+            EventLog.add(this, "спец. возможности: " + LauncherState.name(state)
+                    + " (" + why + ")");
+        }
         LauncherState.set(state);
     }
 
@@ -135,9 +134,4 @@ public class RecentsDetectorService extends AccessibilityService {
         return "com.sec.android.app.launcher";
     }
 
-    private boolean isInputMethod(String packageName) {
-        String current = android.provider.Settings.Secure.getString(getContentResolver(),
-                android.provider.Settings.Secure.DEFAULT_INPUT_METHOD);
-        return current != null && current.startsWith(packageName + "/");
-    }
 }

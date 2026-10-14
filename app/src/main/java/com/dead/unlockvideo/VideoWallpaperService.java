@@ -184,6 +184,8 @@ public class VideoWallpaperService extends WallpaperService {
         private int zoomBucket = -1;
         /** Вернулись из приложения, но пока в списке недавних — ждём рабочего стола. */
         private boolean pendingHome;
+        /** Когда обои стали видны после приложения — старые наблюдения лаунчера не в счёт. */
+        private long visibleSince;
 
         // Эффекты
         /** Текущий масштаб от эффекта разблокировки. */
@@ -381,15 +383,16 @@ public class VideoWallpaperService extends WallpaperService {
             if (!unlocked) animateUnlockZoom(lockScale(), lockZoomDuration());
             if (backFromApp && cfg.startOnHome && !isPreview() && !cfg.startInRecents
                     && LauncherState.serviceRunning()) {
-                // Служба специальных возможностей знает, что на экране: запускаем, только
-                // когда это рабочий стол (не список недавних и не лёгкое сворачивание).
-                if (LauncherState.state() == LauncherState.HOME) {
-                    log("запуск: возврат на рабочий стол");
-                    triggerForward(true);
-                } else {
-                    pendingHome = true;
-                    log("ждём рабочего стола (сейчас: "
-                            + LauncherState.name(LauncherState.state()) + ")");
+                // Служба специальных возможностей видит экран лаунчера: запускаем, только
+                // когда после появления обоев она увидит рабочий стол (а не список недавних;
+                // при лёгком сворачивании лаунчер вообще не показывается).
+                pendingHome = true;
+                // Событие лаунчера может прийти чуть раньше, чем обои стали видны.
+                visibleSince = SystemClock.uptimeMillis() - 300;
+                log("ждём рабочего стола");
+                if (LauncherState.state() == LauncherState.HOME
+                        && LauncherState.changedAt() >= visibleSince) {
+                    onLauncherState(LauncherState.HOME);
                 }
             } else if (backFromApp && cfg.startOnHome && !isPreview()) {
                 if (cfg.startInRecents || !zoomReported || launcherZoom < HOME_ZOOM_THRESHOLD) {
@@ -410,7 +413,8 @@ public class VideoWallpaperService extends WallpaperService {
         /** Служба специальных возможностей сообщила, что теперь на экране. */
         @Override
         public void onLauncherState(int state) {
-            if (pendingHome && visible && state == LauncherState.HOME) {
+            if (pendingHome && visible && state == LauncherState.HOME
+                    && LauncherState.changedAt() >= visibleSince) {
                 pendingHome = false;
                 log("запуск: возврат на рабочий стол");
                 triggerForward(true);
