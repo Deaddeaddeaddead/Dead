@@ -27,18 +27,20 @@ final class SceneClip extends Clip implements WallpaperRenderer.SceneSource {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final int duration;
     private final boolean reversed;
-    /** Доля времени на мягкий разгон и торможение (Easing.soft). */
-    private final float ramp;
+    /** Доли времени на мягкий разгон и на торможение (Easing.soft). */
+    private final float rampStart;
+    private final float rampEnd;
     private volatile State state = new State(0, 0, false);
     private volatile boolean looping;
     /** Позицию сменили — рендеру нужен новый кадр. */
     private Runnable onChange;
     private final Runnable finish = this::onReachedEnd;
 
-    SceneClip(int durationMs, boolean reversed, float ramp) {
+    SceneClip(int durationMs, boolean reversed, float rampStart, float rampEnd) {
         duration = Math.max(1, durationMs);
         this.reversed = reversed;
-        this.ramp = ramp;
+        this.rampStart = rampStart;
+        this.rampEnd = rampEnd;
     }
 
     void setOnChange(Runnable onChange) {
@@ -146,8 +148,10 @@ final class SceneClip extends Clip implements WallpaperRenderer.SceneSource {
     @Override
     public float progress() {
         float t = positionOf(state, SystemClock.uptimeMillis()) / (float) duration;
-        float eased = Easing.soft(t, ramp);
-        return reversed ? 1f - eased : eased;
+        // Обратный ход — та же кривая от конца: кадр в позиции p тот же, что у прямого хода
+        // в позиции duration − p.
+        return reversed ? Easing.soft(1f - t, rampStart, rampEnd)
+                : Easing.soft(t, rampStart, rampEnd);
     }
 
     @Override

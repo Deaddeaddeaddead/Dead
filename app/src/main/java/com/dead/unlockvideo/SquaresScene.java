@@ -12,7 +12,8 @@ import java.nio.FloatBuffer;
 /**
  * Сцена «Квадраты»: три стеклянных квадрата друг под другом, каждый наезжает на соседа.
  * Свет квадрата перенесён со света нижней фигуры роликов Light02/03 (одна модель на все три:
- * гладкая текстура холста квадрата и таблица канта по контуру — LightData). Квадраты рисуются
+ * гладкая текстура холста квадрата и таблица канта по контуру — LightData); цвет у квадрата
+ * общий для сцены или свой (перекраска, LightColors). Квадраты рисуются
  * по очереди от дальнего к ближнему, каждый — поверх того, что уже нарисовано позади: сквозь
  * квадрат видно заднее, ослабленное прозрачностью, через чистое, матовое (размытое) или
  * рифлёное стекло. Глубина у каждого своя: дальний меньше, тусклее, при наклоне телефона
@@ -60,8 +61,10 @@ final class SquaresScene implements Scene {
     private final int blurRes;
     private final FloatBuffer quad = ByteBuffer.allocateDirect(8 * 4)
             .order(ByteOrder.nativeOrder()).asFloatBuffer();
-    private LightData data;
-    private int dataset = -1;
+    /** Данные света по LightColors.DATASETS — какие нужны квадратам. */
+    private final LightData[] data = new LightData[LightColors.DATASETS.length];
+    /** Не загрузились — больше не пробовать. */
+    private final boolean[] failed = new boolean[LightColors.DATASETS.length];
     /**
      * Буферы: два во весь экран (что уже нарисовано — по очереди), два в 1/4 и два в 1/8
      * (размытое для матового стекла).
@@ -155,34 +158,57 @@ final class SquaresScene implements Scene {
     }
 
     private static float depth(float[] p, int j) {
-        return p[LightColors.P_SQUARES + 4 * j + 3];
+        return p[base(j) + LightColors.S_DEPTH];
+    }
+
+    private static int base(int j) {
+        return LightColors.P_SQUARES + LightColors.SQUARE_SIZE * j;
+    }
+
+    /** Загружает данные, нужные квадратам, и отпускает ненужные; false — не загрузились. */
+    private boolean ensureData(float[] p) {
+        boolean ok = true;
+        for (int d = 0; d < data.length; d++) {
+            boolean needed = false;
+            for (int j = 0; j < SQUARES; j++) {
+                if ((int) p[base(j) + LightColors.S_DATASET] == d) needed = true;
+            }
+            if (needed && data[d] == null) {
+                if (!failed[d]) {
+                    try {
+                        data[d] = new LightData(LightScene.assets(), "scenes/squares_"
+                                + LightColors.DATASETS[d] + ".bin");
+                    } catch (IOException e) {
+                        Log.w(TAG, "squares data failed", e);
+                        failed[d] = true;
+                    }
+                }
+                if (data[d] == null) ok = false;
+            } else if (!needed && data[d] != null) {
+                data[d].release();
+                data[d] = null;
+            }
+        }
+        return ok;
     }
 
     @Override
     public void draw(int width, int height, float[] cropBox, float t, float[] pal, float viewX,
             float viewY) {
-        int wanted = (int) pal[LightColors.P_DATASET];
-        if (wanted != dataset) {
-            if (data != null) data.release();
-            data = null;
-            dataset = wanted;
-            try {
-                data = new LightData(LightScene.assets(), "scenes/squares_"
-                        + LightColors.DATASETS[wanted] + ".bin");
-            } catch (IOException e) {
-                Log.w(TAG, "squares data failed", e);
-            }
+        if (!ensureData(pal)) return;
+        for (LightData d : data) {
+            if (d != null) d.weights(t);
         }
-        if (data == null) return;
-        data.weights(t);
         buffers(width, height);
         layout(pal, viewX, viewY);
         int prev = -1;
         for (int i = 0; i < SQUARES; i++) {
             int j = order[i];
-            int base = LightColors.P_SQUARES + 4 * j;
+            int base = base(j);
+            LightData light = data[(int) pal[base + LightColors.S_DATASET]];
             boolean last = i == SQUARES - 1;
-            boolean blurred = prev >= 0 && pal[base + 1] > 0.5f && pal[base + 2] > 0f;
+            boolean blurred = prev >= 0 && pal[base + LightColors.S_GLASS] > 0.5f
+                    && pal[base + LightColors.S_STRENGTH] > 0f;
             if (blurred) blurBehind(prev);
             int target = last ? -1 : i % 2;
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, target < 0 ? 0 : frames[target]);
@@ -190,18 +216,19 @@ final class SquaresScene implements Scene {
             GLES20.glUseProgram(layer);
             GLES20.glUniform2f(res, width, height);
             GLES20.glUniform4f(crop, cropBox[0], cropBox[1], cropBox[2], cropBox[3]);
-            GLES20.glUniform4fv(smoothWeights, LightData.LAYERS * 3, data.smoothUniform, 0);
-            GLES20.glUniform4fv(atlasWeights, LightData.LAYERS * 3, data.atlasUniform, 0);
-            GLES20.glUniform3fv(smoothBias, 1, data.smoothConst, 0);
-            GLES20.glUniform3fv(atlasBias, 1, data.atlasConst, 0);
-            GLES20.glUniform3fv(background, 1, data.background, 0);
-            GLES20.glUniformMatrix3fv(color, 1, false, pal, LightColors.P_COLOR);
+            GLES20.glUniform4fv(smoothWeights, LightData.LAYERS * 3, light.smoothUniform, 0);
+            GLES20.glUniform4fv(atlasWeights, LightData.LAYERS * 3, light.atlasUniform, 0);
+            GLES20.glUniform3fv(smoothBias, 1, light.smoothConst, 0);
+            GLES20.glUniform3fv(atlasBias, 1, light.atlasConst, 0);
+            GLES20.glUniform3fv(background, 1, light.background, 0);
+            GLES20.glUniformMatrix3fv(color, 1, false, pal, base + LightColors.S_COLOR);
             GLES20.glUniform1f(hasPrev, prev >= 0 ? 1f : 0f);
             GLES20.glUniform3f(square, centerX[j], centerY[j], scale[j]);
-            GLES20.glUniform4f(glass, pal[base], pal[base + 1], pal[base + 2], bright[j]);
+            GLES20.glUniform4f(glass, pal[base + LightColors.S_ALPHA],
+                    pal[base + LightColors.S_GLASS], pal[base + LightColors.S_STRENGTH], bright[j]);
             GLES20.glUniform1f(dither, last ? 1f : 0f);
-            int[] textures = {data.smoothTexture, data.atlasTexture,
-                    prev >= 0 ? frameTextures[prev] : data.smoothTexture,
+            int[] textures = {light.smoothTexture, light.atlasTexture,
+                    prev >= 0 ? frameTextures[prev] : light.smoothTexture,
                     frameTextures[2], frameTextures[4]};
             for (int k = 0; k < textures.length; k++) {
                 GLES20.glActiveTexture(GLES20.GL_TEXTURE0 + k);
@@ -290,8 +317,10 @@ final class SquaresScene implements Scene {
     @Override
     public void release() {
         deleteBuffers();
-        if (data != null) data.release();
-        data = null;
+        for (int d = 0; d < data.length; d++) {
+            if (data[d] != null) data[d].release();
+            data[d] = null;
+        }
         GLES20.glDeleteProgram(layer);
         GLES20.glDeleteProgram(blur);
     }

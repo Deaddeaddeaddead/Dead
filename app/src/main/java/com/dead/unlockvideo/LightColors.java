@@ -27,9 +27,19 @@ final class LightColors {
     /** Матрица перекраски 3×3 по столбцам. */
     static final int P_COLOR = 1;
     static final int P_OVERLAP = 10;
-    /** У квадрата j (сверху вниз): прозрачность 0..1, вид стекла, сила 0..1, глубина 0..1. */
+    /**
+     * У квадрата j (сверху вниз), с P_SQUARES + SQUARE_SIZE · j: прозрачность 0..1, вид стекла,
+     * сила 0..1, глубина 0..1, данные света и матрица перекраски (свой цвет квадрата или общий).
+     */
     static final int P_SQUARES = 11;
-    static final int SIZE = P_SQUARES + 4 * SQUARES;
+    static final int SQUARE_SIZE = 14;
+    static final int S_ALPHA = 0;
+    static final int S_GLASS = 1;
+    static final int S_STRENGTH = 2;
+    static final int S_DEPTH = 3;
+    static final int S_DATASET = 4;
+    static final int S_COLOR = 5;
+    static final int SIZE = P_SQUARES + SQUARE_SIZE * SQUARES;
 
     /** Свои цвета по умолчанию — светло-бирюзовый и синий бирюзового ролика. */
     static final int[] DEFAULT_COLORS = {0xff01e1ff, 0xff026fff};
@@ -46,34 +56,47 @@ final class LightColors {
     static final int[] DEFAULT_GLASS = {GLASS_CLEAR, GLASS_MATTE, GLASS_REEDED};
     static final int[] DEFAULT_STRENGTH = {0, 60, 50};
     static final int[] DEFAULT_DEPTH = {100, 50, 0};
-    static final int DEFAULT_OVERLAP = 75;
-    static final int MAX_OVERLAP = 90;
+    static final int DEFAULT_OVERLAP = 90;
+    static final int MAX_OVERLAP = 98;
 
     static float[] params(Prefs cfg) {
         return params(cfg.lightPalette, cfg.lightColors, cfg.lightBrightness, cfg.squaresOverlap,
-                cfg.squareAlpha, cfg.squareGlass, cfg.squareStrength, cfg.squareDepth);
+                cfg.squareAlpha, cfg.squareGlass, cfg.squareStrength, cfg.squareDepth,
+                cfg.squareOwnColor, cfg.squareColors);
     }
 
     /**
      * palette — PALETTE_*, colors — два своих цвета (ARGB), brightness — яркость своих цветов,
-     * %; остальное — настройки квадратов в % (glass — вид стекла).
+     * %; остальное — настройки квадратов в % (glass — вид стекла), ownColor и squareColors —
+     * у какого квадрата свой цвет и какой (два цвета, как colors).
      */
     static float[] params(int palette, int[] colors, int brightness, int overlap, int[] alpha,
-            int[] glass, int[] strength, int[] depth) {
+            int[] glass, int[] strength, int[] depth, boolean[] ownColor, int[][] squareColors) {
         float[] p = new float[SIZE];
         p[P_DATASET] = palette == PALETTE_VIOLET ? 1 : 0;
-        float[] m = palette == PALETTE_CUSTOM ? customMatrix(colors, brightness)
-                : new float[] {1, 0, 0, 0, 1, 0, 0, 0, 1};
+        float[] m = palette == PALETTE_CUSTOM ? customMatrix(colors, brightness) : IDENTITY;
         System.arraycopy(m, 0, p, P_COLOR, 9);
         p[P_OVERLAP] = overlap / 100f;
         for (int j = 0; j < SQUARES; j++) {
-            p[P_SQUARES + 4 * j] = alpha[j] / 100f;
-            p[P_SQUARES + 4 * j + 1] = glass[j];
-            p[P_SQUARES + 4 * j + 2] = strength[j] / 100f;
-            p[P_SQUARES + 4 * j + 3] = depth[j] / 100f;
+            int base = P_SQUARES + SQUARE_SIZE * j;
+            p[base + S_ALPHA] = alpha[j] / 100f;
+            p[base + S_GLASS] = glass[j];
+            p[base + S_STRENGTH] = strength[j] / 100f;
+            p[base + S_DEPTH] = depth[j] / 100f;
+            if (ownColor[j]) {
+                // Свой цвет квадрата — перекраска бирюзовых данных, как «Свой» у всей сцены.
+                p[base + S_DATASET] = 0;
+                System.arraycopy(customMatrix(squareColors[j], brightness), 0, p,
+                        base + S_COLOR, 9);
+            } else {
+                p[base + S_DATASET] = p[P_DATASET];
+                System.arraycopy(p, P_COLOR, p, base + S_COLOR, 9);
+            }
         }
         return p;
     }
+
+    private static final float[] IDENTITY = {1, 0, 0, 0, 1, 0, 0, 0, 1};
 
     /**
      * Матрица перекраски (по столбцам): светло-бирюзовый -> свой цвет 1, синий -> свой цвет 2,

@@ -55,8 +55,11 @@ final class Prefs {
     static final int MIN_GLASS_BRIGHTNESS = 50;
     static final int MAX_GLASS_BRIGHTNESS = 150;
     static final String KEY_GLASS_DURATION = "glass_duration";
-    /** Плавность старта и остановки анимации сцены, % (Easing). */
-    static final String KEY_SCENE_SOFTNESS = "scene_softness";
+    /** Плавный старт и плавная остановка анимации сцены, % (Easing). */
+    static final String KEY_EASE_START = "ease_start";
+    static final String KEY_EASE_END = "ease_end";
+    /** Прежняя общая плавность — по ней старт и остановка по умолчанию. */
+    private static final String KEY_SCENE_SOFTNESS = "scene_softness";
     /** Цвет сцен «Ленты» и «Квадраты»: LightColors.PALETTE_*. */
     static final String KEY_LIGHT_PALETTE = "light_palette";
     /** Свои цвета «Лент» и «Квадратов» (ARGB): вместо светло-бирюзового и синего. */
@@ -70,6 +73,12 @@ final class Prefs {
     static final String[] KEY_SQUARE_STRENGTH = {
             "square_strength_1", "square_strength_2", "square_strength_3"};
     static final String[] KEY_SQUARE_DEPTH = {"square_depth_1", "square_depth_2", "square_depth_3"};
+    /** Свой цвет у квадрата (иначе — цвет сцены) и два его цвета. */
+    static final String[] KEY_SQUARE_OWN_COLOR = {
+            "square_own_color_1", "square_own_color_2", "square_own_color_3"};
+    static final String[][] KEY_SQUARE_COLORS = {
+            {"square_color_1_1", "square_color_1_2"}, {"square_color_2_1", "square_color_2_2"},
+            {"square_color_3_1", "square_color_3_2"}};
 
     static final String KEY_VIDEO_NAME = "video_name";
     /** Меняется при каждом новом видео — чтобы не принять реверс от старого. */
@@ -156,8 +165,9 @@ final class Prefs {
     final int glassBrightness;
     /** Длительность анимации стекла, мс. */
     final int glassDurationMs;
-    /** Плавность старта и остановки анимации сцены, 0..100 %. */
-    final int sceneSoftness;
+    /** Плавный старт и плавная остановка анимации сцены, 0..100 %. */
+    final int easeStart;
+    final int easeEnd;
     /** «Ленты» и «Квадраты»: цвет (LightColors.PALETTE_*), свои цвета, их яркость, %. */
     final int lightPalette;
     final int[] lightColors;
@@ -168,6 +178,8 @@ final class Prefs {
     final int[] squareGlass;
     final int[] squareStrength;
     final int[] squareDepth;
+    final boolean[] squareOwnColor;
+    final int[][] squareColors;
     final boolean reverseReady;
     final int reverseLastMs;
     final boolean finished;
@@ -220,8 +232,9 @@ final class Prefs {
                 sp.getInt(KEY_GLASS_BRIGHTNESS, 100)));
         glassDurationMs = 100 * Math.max(MIN_GLASS_DURATION, Math.min(MAX_GLASS_DURATION,
                 sp.getInt(KEY_GLASS_DURATION, 20)));
-        sceneSoftness = Math.max(0, Math.min(100,
-                sp.getInt(KEY_SCENE_SOFTNESS, Easing.DEFAULT_SOFTNESS)));
+        int softness = sp.getInt(KEY_SCENE_SOFTNESS, Easing.DEFAULT_SOFTNESS);
+        easeStart = clamp100(sp.getInt(KEY_EASE_START, softness));
+        easeEnd = clamp100(sp.getInt(KEY_EASE_END, softness));
         lightPalette = Math.max(0, Math.min(LightColors.PALETTE_CUSTOM, sp.getInt(KEY_LIGHT_PALETTE,
                 oldViolet ? LightColors.PALETTE_VIOLET : LightColors.PALETTE_TEAL)));
         lightColors = new int[KEY_LIGHT_COLORS.length];
@@ -237,6 +250,8 @@ final class Prefs {
         squareGlass = new int[LightColors.SQUARES];
         squareStrength = new int[LightColors.SQUARES];
         squareDepth = new int[LightColors.SQUARES];
+        squareOwnColor = new boolean[LightColors.SQUARES];
+        squareColors = new int[LightColors.SQUARES][2];
         for (int j = 0; j < LightColors.SQUARES; j++) {
             squareAlpha[j] = clamp100(sp.getInt(KEY_SQUARE_ALPHA[j], LightColors.DEFAULT_ALPHA[j]));
             squareGlass[j] = Math.max(0, Math.min(LightColors.GLASS_REEDED,
@@ -244,6 +259,11 @@ final class Prefs {
             squareStrength[j] = clamp100(sp.getInt(KEY_SQUARE_STRENGTH[j],
                     LightColors.DEFAULT_STRENGTH[j]));
             squareDepth[j] = clamp100(sp.getInt(KEY_SQUARE_DEPTH[j], LightColors.DEFAULT_DEPTH[j]));
+            squareOwnColor[j] = sp.getBoolean(KEY_SQUARE_OWN_COLOR[j], false);
+            for (int i = 0; i < 2; i++) {
+                squareColors[j][i] = 0xff000000
+                        | sp.getInt(KEY_SQUARE_COLORS[j][i], LightColors.DEFAULT_COLORS[i]);
+            }
         }
         reverseReady = sp.getBoolean(KEY_REVERSE_READY, false)
                 && sp.getInt(KEY_REVERSE_FORMAT, 1) == REVERSE_FORMAT;

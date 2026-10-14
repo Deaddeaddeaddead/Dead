@@ -118,6 +118,9 @@ public class MainActivity extends Activity {
     private int[] squareGlass;
     private int[] squareStrength;
     private int[] squareDepth;
+    /** У какого квадрата свой цвет и какой (два цвета, как у сцены). */
+    private boolean[] squareOwnColor;
+    private int[][] squareColors;
     /** Какой квадрат сейчас настраивается. */
     private int selectedSquare = 2;
     private LinearLayout squaresControls;
@@ -125,9 +128,14 @@ public class MainActivity extends Activity {
     private Segmented squareGlassChoice;
     private LinearLayout squareStrengthRow;
     private SeekBar squareDepthBar;
+    private Segmented squareColorChoice;
+    private LinearLayout squareColorRows;
+    private final View[] squareSwatches = new View[2];
     private SeekBar brightnessBar;
     private int glassDurationMs;
-    private int sceneSoftness;
+    /** Плавный старт и плавная остановка анимации сцены, %. */
+    private int easeStart;
+    private int easeEnd;
     /** Живое превью сцены в приложении. */
     private WallpaperRenderer glassRenderer;
     private SceneClip glassClip;
@@ -221,7 +229,8 @@ public class MainActivity extends Activity {
         glassTintBottom = cfg.glassTintBottom;
         glassBrightness = cfg.glassBrightness;
         glassDurationMs = cfg.glassDurationMs;
-        sceneSoftness = cfg.sceneSoftness;
+        easeStart = cfg.easeStart;
+        easeEnd = cfg.easeEnd;
         lightPalette = cfg.lightPalette;
         lightColors = cfg.lightColors.clone();
         lightBrightness = cfg.lightBrightness;
@@ -230,6 +239,9 @@ public class MainActivity extends Activity {
         squareGlass = cfg.squareGlass.clone();
         squareStrength = cfg.squareStrength.clone();
         squareDepth = cfg.squareDepth.clone();
+        squareOwnColor = cfg.squareOwnColor.clone();
+        squareColors = new int[cfg.squareColors.length][];
+        for (int j = 0; j < squareColors.length; j++) squareColors[j] = cfg.squareColors[j].clone();
         LinearLayout sourceIsland = island(root, "Обои");
         sourceChoice = new Segmented(sourceIsland, "Что показывать",
                 new String[] {"Видео", "Сцена"}, glass ? 1 : 0, index -> {
@@ -317,12 +329,23 @@ public class MainActivity extends Activity {
                     newGlassClip();
                     playGlassPreview();
                 });
-        sliderRow(glassIsland, "Плавный старт и остановка",
-                "Разгон в начале и торможение в конце", 0, 100, sceneSoftness,
+        // Сглаживание движения: в начале — медленный разгон, в конце — плавное торможение.
+        sliderRow(glassIsland, "Плавный старт",
+                "Движение медленно разгоняется в начале — чем больше, тем дольше", 0, 100,
+                easeStart, value -> value == 0 ? "выкл." : value + "%",
+                value -> {
+                    easeStart = value;
+                    sp.edit().putInt(Prefs.KEY_EASE_START, value).apply();
+                    Prefs.bumpRevision(this);
+                    newGlassClip();
+                    playGlassPreview();
+                });
+        sliderRow(glassIsland, "Плавная остановка",
+                "Движение плавно тормозит в конце — чем больше, тем дольше", 0, 100, easeEnd,
                 value -> value == 0 ? "выкл." : value + "%",
                 value -> {
-                    sceneSoftness = value;
-                    sp.edit().putInt(Prefs.KEY_SCENE_SOFTNESS, value).apply();
+                    easeEnd = value;
+                    sp.edit().putInt(Prefs.KEY_EASE_END, value).apply();
                     Prefs.bumpRevision(this);
                     newGlassClip();
                     playGlassPreview();
@@ -788,7 +811,60 @@ public class MainActivity extends Activity {
                     squareDepth[selectedSquare] = value;
                     previewPalette();
                 }));
+        squareColorChoice = new Segmented(squaresControls, "Цвет квадрата",
+                new String[] {"Как у сцены", "Свой"}, squareOwnColor[selectedSquare] ? 1 : 0,
+                index -> {
+                    squareOwnColor[selectedSquare] = index == 1;
+                    sp.edit().putBoolean(Prefs.KEY_SQUARE_OWN_COLOR[selectedSquare], index == 1)
+                            .apply();
+                    Prefs.bumpRevision(this);
+                    showSquare();
+                    previewPalette();
+                });
+        squareColorRows = vertical();
+        squaresControls.addView(squareColorRows);
+        String[] titles = {"Цвет 1", "Цвет 2"};
+        String[] subtitles = {"Свечение и яркий кант", "Свет на квадрате"};
+        for (int i = 0; i < titles.length; i++) {
+            int index = i;
+            LinearLayout row = row(titles[i], subtitles[i]);
+            View swatch = new View(this);
+            row.addView(swatch, new LinearLayout.LayoutParams(dp(36), dp(36)));
+            squareSwatches[i] = swatch;
+            row.setOnClickListener(v -> editSquareColor(selectedSquare, index,
+                    titles[index] + " квадрата", this::showSquare));
+            squareColorRows.addView(row);
+        }
         showSquare();
+    }
+
+    /** Свой цвет квадрата j (i — 0 или 1). */
+    private void editSquareColor(int j, int i, String title, Runnable onSaved) {
+        int[][] colors = new int[squareColors.length][];
+        for (int k = 0; k < colors.length; k++) colors[k] = squareColors[k].clone();
+        colorDialog(title, colors[j][i], LightColors.DEFAULT_COLORS[i], "Как в ролике",
+                new ColorDialogHost() {
+                    @Override
+                    public float[] params(int color) {
+                        colors[j][i] = color;
+                        return LightColors.params(lightPalette, lightColors, lightBrightness,
+                                squaresOverlap, squareAlpha, squareGlass, squareStrength,
+                                squareDepth, squareOwnColor, colors);
+                    }
+
+                    @Override
+                    public void addExtra(LinearLayout content, Runnable apply) {
+                    }
+
+                    @Override
+                    public void save(int color) {
+                        colors[j][i] = color;
+                        squareColors = colors;
+                        sp.edit().putInt(Prefs.KEY_SQUARE_COLORS[j][i], color).apply();
+                        Prefs.bumpRevision(MainActivity.this);
+                        onSaved.run();
+                    }
+                });
     }
 
     /** Настройки выбранного квадрата — в ползунки; сила видна только у матового и рифлёного. */
@@ -799,6 +875,12 @@ public class MainActivity extends Activity {
         squareStrengthRow.setVisibility(squareGlass[selectedSquare] == LightColors.GLASS_CLEAR
                 ? View.GONE : View.VISIBLE);
         squareDepthBar.setProgress(squareDepth[selectedSquare]);
+        if (squareColorChoice == null) return;
+        squareColorChoice.select(squareOwnColor[selectedSquare] ? 1 : 0);
+        squareColorRows.setVisibility(squareOwnColor[selectedSquare] ? View.VISIBLE : View.GONE);
+        for (int i = 0; i < squareSwatches.length; i++) {
+            squareSwatches[i].setBackground(swatchDrawable(squareColors[selectedSquare][i]));
+        }
     }
 
     /**
@@ -820,7 +902,8 @@ public class MainActivity extends Activity {
     private float[] currentParams() {
         if (ScenePresets.light(scene)) {
             return LightColors.params(lightPalette, lightColors, lightBrightness, squaresOverlap,
-                    squareAlpha, squareGlass, squareStrength, squareDepth);
+                    squareAlpha, squareGlass, squareStrength, squareDepth, squareOwnColor,
+                    squareColors);
         }
         return GlassScene.palette(glassPalette, glassColors, glassTintTop, glassTintBottom,
                 glassBrightness);
@@ -928,7 +1011,7 @@ public class MainActivity extends Activity {
                         colors[i] = color;
                         return LightColors.params(LightColors.PALETTE_CUSTOM, colors,
                                 lightBrightness, squaresOverlap, squareAlpha, squareGlass,
-                                squareStrength, squareDepth);
+                                squareStrength, squareDepth, squareOwnColor, squareColors);
                     }
 
                     @Override
@@ -1189,7 +1272,8 @@ public class MainActivity extends Activity {
     private void newGlassClip() {
         if (glassRenderer == null) return;
         if (glassClip != null) glassClip.release();
-        SceneClip clip = new SceneClip(glassDurationMs, false, Easing.ramp(sceneSoftness));
+        SceneClip clip = new SceneClip(glassDurationMs, false, Easing.ramp(easeStart),
+                Easing.ramp(easeEnd));
         clip.setOnChange(() -> {
             if (glassRenderer != null) glassRenderer.requestSceneFrame();
         });
