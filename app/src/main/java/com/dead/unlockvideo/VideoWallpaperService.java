@@ -37,6 +37,8 @@ public class VideoWallpaperService extends WallpaperService {
     private static final int AT_END = Integer.MAX_VALUE;
     /** Как часто проверять разблокировку, пока виден экран блокировки. */
     private static final long UNLOCK_POLL_MS = 100;
+    /** Опрос экрана лаунчера при возврате на рабочий стол. */
+    private static final long HOME_PROBE_MS = 40;
     /**
      * Отдаление обоев от лаунчера (0 — рабочий стол, 1 — открыто приложение или список
      * недавних). Когда оно падает ниже этого порога, начался переход на рабочий стол.
@@ -185,6 +187,38 @@ public class VideoWallpaperService extends WallpaperService {
         /** Когда обои стали видны после приложения — старые наблюдения лаунчера не в счёт. */
         private long visibleSince;
         private long lastHomeStart;
+        // Опрос экрана лаунчера, пока ждём рабочего стола.
+        private long launcherSeenAt;
+        private long homeSeenAt;
+        private String firstSignature;
+        /**
+         * Пока ждём рабочего стола, опрашиваем экран лаунчера и пишем в журнал, какие элементы
+         * видны в начале жеста, в списке недавних и на рабочем столе. Решение о запуске
+         * по-прежнему принимает служба по событиям лаунчера.
+         */
+        private final Runnable probeLoop = new Runnable() {
+            @Override
+            public void run() {
+                RecentsDetectorService detector = RecentsDetectorService.instance;
+                if (!pendingHome || !visible || detector == null) return;
+                long now = SystemClock.uptimeMillis();
+                int seen = detector.probe();
+                if (seen != LauncherState.UNKNOWN && launcherSeenAt == 0) {
+                    launcherSeenAt = now;
+                    firstSignature = detector.lastProbeSignature;
+                    log("опрос: лаунчер виден через " + (now - visibleSince)
+                            + "мс; элементы: " + firstSignature);
+                }
+                if (seen == LauncherState.RECENTS && homeSeenAt == 0) {
+                    homeSeenAt = now; // здесь — «список недавних уже записан»
+                    log("опрос: список недавних через " + (now - launcherSeenAt)
+                            + "мс после появления лаунчера; элементы: "
+                            + detector.lastProbeSignature);
+                }
+                if (now - visibleSince < 5000) handler.postDelayed(this, HOME_PROBE_MS);
+            }
+        };
+
         /** Пока открыто приложение, видео уже перемотано в начало к возврату. */
         private boolean preparedForHome;
         private int homeRestorePosition;
@@ -394,7 +428,12 @@ public class VideoWallpaperService extends WallpaperService {
                 // при лёгком сворачивании лаунчер вообще не показывается).
                 pendingHome = true;
                 visibleSince = SystemClock.uptimeMillis();
+                launcherSeenAt = 0;
+                homeSeenAt = 0;
+                firstSignature = null;
                 log("ждём рабочего стола");
+                handler.removeCallbacks(probeLoop);
+                handler.post(probeLoop);
             } else if (backFromApp && cfg.startOnHome && !isPreview()) {
                 if (cfg.startInRecents || !zoomReported || launcherZoom < HOME_ZOOM_THRESHOLD) {
                     startFromHome();
@@ -416,6 +455,10 @@ public class VideoWallpaperService extends WallpaperService {
          */
         private void startFromHome() {
             preparedForHome = false;
+            RecentsDetectorService detector = RecentsDetectorService.instance;
+            if (detector != null && detector.probe() == LauncherState.HOME) {
+                log("опрос: рабочий стол, элементы: " + detector.lastProbeSignature);
+            }
             long now = SystemClock.uptimeMillis();
             if (phase == PHASE_PLAYING && now - lastHomeStart < 1500) {
                 log("возврат на рабочий стол: видео уже идёт, продолжаем");

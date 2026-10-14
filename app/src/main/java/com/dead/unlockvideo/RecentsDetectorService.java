@@ -40,9 +40,41 @@ public class RecentsDetectorService extends AccessibilityService {
     private String launcherPackage;
     private long lastContentCheck;
 
+    /** Работающая служба — обои опрашивают её напрямую (один процесс, главный поток). */
+    static RecentsDetectorService instance;
+
+    /**
+     * Что сейчас на экране лаунчера — без ожидания событий: просматривает все видимые окна.
+     * Лаунчер виден с самого начала жеста возврата, его события приходят позже.
+     */
+    int probe() {
+        if (launcherPackage == null) return LauncherState.UNKNOWN;
+        java.util.List<android.view.accessibility.AccessibilityWindowInfo> windows;
+        try {
+            windows = getWindows();
+        } catch (RuntimeException e) {
+            return LauncherState.UNKNOWN;
+        }
+        for (android.view.accessibility.AccessibilityWindowInfo window : windows) {
+            AccessibilityNodeInfo root = window.getRoot();
+            if (root == null || root.getPackageName() == null
+                    || !launcherPackage.contentEquals(root.getPackageName())) {
+                continue;
+            }
+            lastProbeMarker = findRecentsMarker(root);
+            lastProbeSignature = signature(root);
+            return lastProbeMarker != null ? LauncherState.RECENTS : LauncherState.HOME;
+        }
+        return LauncherState.UNKNOWN;
+    }
+
+    String lastProbeMarker;
+    String lastProbeSignature = "";
+
     @Override
     protected void onServiceConnected() {
         super.onServiceConnected();
+        instance = this;
         launcherPackage = findLauncherPackage();
         // События — только от лаунчера: в остальных приложениях служба не просыпается.
         AccessibilityServiceInfo info = getServiceInfo();
@@ -56,6 +88,7 @@ public class RecentsDetectorService extends AccessibilityService {
 
     @Override
     public void onDestroy() {
+        if (instance == this) instance = null;
         handler.removeCallbacksAndMessages(null);
         LauncherState.setServiceRunning(false);
         super.onDestroy();
@@ -140,11 +173,14 @@ public class RecentsDetectorService extends AccessibilityService {
         ArrayDeque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
         int visited = 0;
-        while (!queue.isEmpty() && visited < MAX_NODES && ids.size() < 25) {
+        while (!queue.isEmpty() && visited < MAX_NODES && ids.size() < 40) {
             AccessibilityNodeInfo node = queue.poll();
             visited++;
             String id = node.getViewIdResourceName();
-            if (id != null) ids.add(id.substring(id.indexOf('/') + 1));
+            // «+» — элемент виден на экране, «-» — есть в дереве, но не виден.
+            if (id != null) {
+                ids.add(id.substring(id.indexOf('/') + 1) + (node.isVisibleToUser() ? "+" : "-"));
+            }
             for (int i = 0; i < node.getChildCount(); i++) {
                 AccessibilityNodeInfo child = node.getChild(i);
                 if (child != null) queue.add(child);
