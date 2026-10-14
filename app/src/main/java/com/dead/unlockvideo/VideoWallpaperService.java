@@ -424,8 +424,13 @@ public class VideoWallpaperService extends WallpaperService {
         private void goingOff(String reason) {
             if (screenOffHandled) return;
             screenOffHandled = true;
-            log("подготовка к выключению экрана: " + reason);
-            boolean wasUnlocked = unlocked;
+            log("подготовка к выключению экрана: " + reason + "; настройки: AOD="
+                    + new String[] {"как есть", "блокировка", "рабочий стол"}[cfg.screenOffPose]
+                    + ", при блокировке="
+                    + new String[] {"оставить", "к началу", "реверсом"}[cfg.lockAction]
+                    + (cfg.lockAction == Prefs.LOCK_REVERSE && !reverseAvailable
+                            ? " (реверс не готов)" : "")
+                    + ", повторов=" + (cfg.infinite() ? "∞" : String.valueOf(cfg.plays)));
             unlocked = isPreview();
             keyguardGone = isPreview();
             sampleOnWake = true;
@@ -446,16 +451,22 @@ public class VideoWallpaperService extends WallpaperService {
 
             // Кадр на AOD (обои видны и там): «рабочий стол» — доигрываем вперёд до конца,
             // а возврат к началу будет на экране блокировки.
-            if (cfg.screenOffPose == Prefs.POSE_HOME && wasUnlocked && !cfg.infinite()) {
+            if (cfg.screenOffPose == Prefs.POSE_HOME && !cfg.infinite()) {
                 needReverse = cfg.lockAction == Prefs.LOCK_REVERSE && reverseAvailable;
                 rewindOnScreenOn = cfg.lockAction == Prefs.LOCK_REWIND;
                 playToEndOnAod();
                 return;
             }
             boolean atStart = forwardPosition() <= 30;
-            if (cfg.lockAction == Prefs.LOCK_KEEP || atStart) return;
+            if (cfg.lockAction == Prefs.LOCK_KEEP || atStart) {
+                log("AOD: кадр не меняем" + (atStart ? " (уже в начале)" : ""));
+                return;
+            }
             if (cfg.lockAction == Prefs.LOCK_REVERSE && reverseAvailable) {
                 needReverse = true;
+                if (cfg.screenOffPose != Prefs.POSE_LOCK) {
+                    log("AOD: кадр не меняем, реверс — на экране блокировки");
+                }
                 if (cfg.screenOffPose == Prefs.POSE_LOCK) {
                     // «Блокировка»: реверс играет прямо на AOD.
                     startReverse();
@@ -471,6 +482,7 @@ public class VideoWallpaperService extends WallpaperService {
         private void playToEndOnAod() {
             if (forward == null || !forwardReady) return;
             if (forwardPosition() >= forwardEndMs() - END_EPSILON_MS) {
+                log("AOD: видео уже в конце (состояние рабочего стола)");
                 if (!cfg.endOnLastFrame) seekForward(0);
                 return;
             }
@@ -781,7 +793,12 @@ public class VideoWallpaperService extends WallpaperService {
 
         private void startReverse() {
             if (reversing) return;
-            if (!reverseAvailable || backward == null || !backwardReady || !visible) return;
+            if (!reverseAvailable || backward == null || !backwardReady || !visible) {
+                log("реверс не запущен: " + (!reverseAvailable ? "реверс не готов"
+                        : backward == null || !backwardReady ? "плеер реверса не готов"
+                        : "обои не видны"));
+                return;
+            }
             int position = forwardPosition();
             needReverse = false;
             if (position <= 0) return;
