@@ -1,6 +1,5 @@
 package com.dead.unlockvideo;
 
-import android.animation.ValueAnimator;
 import android.app.KeyguardManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -18,11 +17,11 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.service.wallpaper.WallpaperService;
 import android.util.Log;
 import android.view.Display;
 import android.view.SurfaceHolder;
-import android.view.animation.DecelerateInterpolator;
 
 import java.io.File;
 
@@ -184,8 +183,37 @@ public class VideoWallpaperService extends WallpaperService {
         // Эффекты
         /** Текущий масштаб от эффекта разблокировки. */
         private float unlockScale = 1f;
-        private ValueAnimator unlockAnimator;
-        private float unlockTarget;
+        // Плавный переход масштаба (и, при выключении экрана, возврат параллакса в центр).
+        // Свой таймер вместо ValueAnimator: в AOD кадры экрана идут редко, а время — нет.
+        private boolean zoomAnimating;
+        private float zoomFrom;
+        private float zoomTo;
+        private long zoomStart;
+        private int zoomDuration;
+        /** Вместе с масштабом плавно вернуть параллакс в центр. */
+        private boolean tiltToCenter;
+        private float tiltFromX;
+        private float tiltFromY;
+        private final Runnable zoomStep = new Runnable() {
+            @Override
+            public void run() {
+                float t = Math.min(1f, (SystemClock.uptimeMillis() - zoomStart)
+                        / (float) Math.max(1, zoomDuration));
+                float eased = 1f - (1f - t) * (1f - t); // замедление к концу
+                unlockScale = zoomFrom + (zoomTo - zoomFrom) * eased;
+                if (tiltToCenter) {
+                    tiltX = tiltFromX * (1f - eased);
+                    tiltY = tiltFromY * (1f - eased);
+                }
+                applyTransform();
+                if (t < 1f) {
+                    handler.postDelayed(this, 16);
+                } else {
+                    zoomAnimating = false;
+                    tiltToCenter = false;
+                }
+            }
+        };
         private SensorManager sensorManager;
         private Sensor gyroscope;
         private boolean gyroscopeOn;
@@ -399,16 +427,12 @@ public class VideoWallpaperService extends WallpaperService {
             handler.removeCallbacks(unlockWatch);
             hiddenByApp = false;
             armed = isPreview();
-            cancelUnlockZoom();
-            setGyroscope(false); // параллакс — в центр, гироскоп не тратит батарею
-            // Масштаб для AOD: как на блокировке, как на рабочем столе или как есть.
-            // С рабочего стола на экране блокировки он потом плавно перейдёт к своему.
-            if (cfg.screenOffPose == Prefs.POSE_LOCK) {
-                unlockScale = lockScale();
-            } else if (cfg.screenOffPose == Prefs.POSE_HOME) {
-                unlockScale = homeScale();
-            }
-            applyTransform();
+            // Обои видны и на AOD, поэтому переходим плавно: масштаб — к выбранному
+            // для AOD, параллакс — в центр. Гироскоп выключаем (батарея).
+            float target = cfg.screenOffPose == Prefs.POSE_LOCK ? lockScale()
+                    : cfg.screenOffPose == Prefs.POSE_HOME ? homeScale() : unlockScale;
+            animateTransform(target, cfg.zoomDurationMs, true);
+            setGyroscope(false);
             pauseAll();
             boolean atStart = forwardPosition() <= 30;
             if (cfg.lockAction == Prefs.LOCK_KEEP || atStart) return;
@@ -574,25 +598,30 @@ public class VideoWallpaperService extends WallpaperService {
         }
 
         private void animateUnlockZoom(float target, int durationMs) {
-            if (unlockAnimator != null && Math.abs(unlockTarget - target) < 0.001f) return;
+            animateTransform(target, durationMs, false);
+        }
+
+        /** Плавно к масштабу target; с centerTilt — заодно вернуть параллакс в центр. */
+        private void animateTransform(float target, int durationMs, boolean centerTilt) {
+            if (zoomAnimating && Math.abs(zoomTo - target) < 0.001f && !centerTilt) return;
             cancelUnlockZoom();
-            if (Math.abs(unlockScale - target) < 0.001f) return;
-            unlockTarget = target;
-            unlockAnimator = ValueAnimator.ofFloat(unlockScale, target);
-            unlockAnimator.setDuration(durationMs);
-            unlockAnimator.setInterpolator(new DecelerateInterpolator(1.5f));
-            unlockAnimator.addUpdateListener(a -> {
-                unlockScale = (float) a.getAnimatedValue();
-                applyTransform();
-            });
-            unlockAnimator.start();
+            boolean tiltMoved = centerTilt && (Math.abs(tiltX) > 0.001f || Math.abs(tiltY) > 0.001f);
+            if (Math.abs(unlockScale - target) < 0.001f && !tiltMoved) return;
+            zoomFrom = unlockScale;
+            zoomTo = target;
+            zoomStart = SystemClock.uptimeMillis();
+            zoomDuration = durationMs;
+            tiltToCenter = tiltMoved;
+            tiltFromX = tiltX;
+            tiltFromY = tiltY;
+            zoomAnimating = true;
+            handler.post(zoomStep);
         }
 
         private void cancelUnlockZoom() {
-            if (unlockAnimator != null) {
-                unlockAnimator.cancel();
-                unlockAnimator = null;
-            }
+            handler.removeCallbacks(zoomStep);
+            zoomAnimating = false;
+            tiltToCenter = false;
         }
 
         /** Гироскоп работает, только пока обои видны и параллакс включён. */
@@ -605,8 +634,11 @@ public class VideoWallpaperService extends WallpaperService {
                         SensorManager.SENSOR_DELAY_GAME);
             } else {
                 sensorManager.unregisterListener(gyroListener);
-                angleX = angleY = tiltX = tiltY = 0f;
-                applyTransform();
+                angleX = angleY = 0f;
+                if (!tiltToCenter) {
+                    tiltX = tiltY = 0f;
+                    applyTransform();
+                }
             }
         }
 
