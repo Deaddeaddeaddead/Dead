@@ -8,6 +8,7 @@ import android.util.Log;
 import android.view.Choreographer;
 import android.view.Surface;
 
+import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -54,7 +55,7 @@ final class WallpaperRenderer {
         drawPosted.set(false);
         // Сцена движется — следующий её кадр и так возьмёт новый масштаб и сдвиг; лишний
         // кадр между ними сбил бы ровный ход анимации.
-        if (this.scenePalette >= 0 && this.frameScheduled) return;
+        if (this.scenePalette != null && this.frameScheduled) return;
         draw();
     };
     private int pending = -1;
@@ -85,8 +86,8 @@ final class WallpaperRenderer {
         errorListener = listener;
     }
 
-    /** Палитра сцены; -1 — режим видео. */
-    private int scenePalette = -1;
+    /** Палитра сцены; null — режим видео. */
+    private float[] scenePalette;
     private GlassScene scene;
     private final SceneSource[] sceneSources = new SceneSource[2];
     private Choreographer choreographer;
@@ -199,7 +200,7 @@ final class WallpaperRenderer {
     /** Показать источник, как только у него появится свежий кадр. */
     void showSource(int source) {
         handler.post(() -> {
-            if (scenePalette >= 0) {
+            if (scenePalette != null) {
                 // У сцены кадр есть всегда — переключаемся сразу.
                 active = source;
                 pending = -1;
@@ -274,11 +275,12 @@ final class WallpaperRenderer {
         stillTexture = 0;
     }
 
-    /** Режим «Стекло» с палитрой palette; -1 — обратно к видео. */
-    void setScene(int palette) {
+    /** Режим «Стекло» с палитрой palette (GlassScene.palette); null — обратно к видео. */
+    void setScene(float[] palette) {
+        float[] copy = palette == null ? null : palette.clone();
         handler.post(() -> {
-            if (scenePalette == palette) return;
-            scenePalette = palette;
+            if (Arrays.equals(scenePalette, copy)) return;
+            scenePalette = copy;
             draw();
         });
     }
@@ -297,7 +299,7 @@ final class WallpaperRenderer {
     }
 
     private void drawScene() {
-        if (scenePalette < 0) return;
+        if (scenePalette == null) return;
         draw();
         SceneSource source = sceneSources[active];
         if (source != null && source.animating()) scheduleSceneFrame();
@@ -356,7 +358,7 @@ final class WallpaperRenderer {
 
     private void draw() {
         if (egl == null || viewWidth <= 0 || viewHeight <= 0) return;
-        if (scenePalette >= 0) {
+        if (scenePalette != null) {
             SceneSource source = sceneSources[active];
             if (source == null) source = sceneSources[SOURCE_FORWARD];
             if (source == null) return;
@@ -367,7 +369,7 @@ final class WallpaperRenderer {
                     Log.w(TAG, "scene shader failed", e);
                     ErrorListener listener = errorListener;
                     if (listener != null) listener.onError("сцена не запустилась: " + e.getMessage());
-                    scenePalette = -1;
+                    scenePalette = null;
                     return;
                 }
             }

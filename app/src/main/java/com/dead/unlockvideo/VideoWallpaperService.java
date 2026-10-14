@@ -696,7 +696,7 @@ public class VideoWallpaperService extends WallpaperService {
                     if (phase == PHASE_PLAYING) phase = PHASE_WAITING;
                 }
                 loadConfig();
-                if (renderer != null) renderer.setScene(glass ? cfg.glassPalette : -1);
+                if (renderer != null) renderer.setScene(glass ? GlassScene.palette(cfg) : null);
                 log("настройки обновлены, реверс " + (reverseAvailable ? "готов" : "недоступен"));
                 if (finishedForever) phase = PHASE_DONE;
                 if (needReverse && !reverseAvailable) {
@@ -754,7 +754,7 @@ public class VideoWallpaperService extends WallpaperService {
                 // Сцена рисуется сразу; в превью — неподвижный кадр покоя.
                 stillRequest++;
                 if (target != null) {
-                    target.setScene(cfg.glassPalette);
+                    target.setScene(GlassScene.palette(cfg));
                     if (isPreview()) {
                         float rest = restAtEnd() ? 1f : 0f;
                         target.setSceneSource(WallpaperRenderer.SOURCE_FORWARD,
@@ -771,14 +771,14 @@ public class VideoWallpaperService extends WallpaperService {
                                 });
                     }
                 }
-                int[] tones = GlassScene.colors(cfg.glassPalette);
+                int[] tones = GlassScene.colors(GlassScene.palette(cfg));
                 colors = new WallpaperColors(Color.valueOf(tones[0]), Color.valueOf(tones[1]),
                         Color.valueOf(tones[2]));
                 colorsAtEnd = null;
                 notifyColorsChanged();
                 return;
             }
-            if (target != null) target.setScene(-1);
+            if (target != null) target.setScene(null);
             boolean restEnd = restAtEnd();
             // Превью — кадр покоя; обои — кадр, с которого пойдёт видео.
             boolean showEnd = isPreview() ? restEnd : positionMs == AT_END;
@@ -1208,7 +1208,7 @@ public class VideoWallpaperService extends WallpaperService {
             clip.setOnChange(() -> {
                 if (renderer != null) renderer.requestSceneFrame();
             });
-            renderer.setScene(cfg.glassPalette);
+            renderer.setScene(GlassScene.palette(cfg));
             renderer.setSceneSource(source, clip);
             return clip;
         }

@@ -32,6 +32,11 @@ final class GlassScene {
     static final int PALETTE_ICE = 1;
     static final int PALETTE_AMETHYST = 2;
     static final int PALETTE_EMERALD = 3;
+    /** Свои цвета: оттенки, насыщенность и яркость из настроек (см. custom). */
+    static final int PALETTE_CUSTOM = 4;
+    /** Свои цвета по умолчанию дают «Янтарь». */
+    static final int DEFAULT_GLOW_HUE = 13;
+    static final int DEFAULT_HALO_HUE = 25;
     /** Оттенки: фон, свечение внутри стекла, ореол, подсветка углов фона. */
     private static final float[][] PALETTES = {
             {1.0f, 0.34f, 0.035f, 1.0f, 0.29f, 0.085f, 1.0f, 0.52f, 0.17f, 1.0f, 0.24f, 0.015f},
@@ -430,9 +435,9 @@ final class GlassScene {
      * t — момент ролика (0..1). cropBox — видимая часть кадра сцены (как у видео): доля по X
      * и Y, левый нижний угол. viewX, viewY — сдвиг точки зрения для параллакса (в единицах
      * сцены, ширина кадра — 1): стёкла смещаются относительно светящейся капсулы, а
-     * преломление в них считается из сдвинутой точки.
+     * преломление в них считается из сдвинутой точки. pal — палитра (см. palette).
      */
-    void draw(int width, int height, float[] cropBox, float t, int paletteIndex,
+    void draw(int width, int height, float[] cropBox, float t, float[] pal,
             float viewX, float viewY) {
         float clamped = Math.max(0f, Math.min(1f, t));
         GLES20.glViewport(0, 0, width, height);
@@ -445,7 +450,6 @@ final class GlassScene {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lightTexture);
         GLES20.glUniform1i(lightUniform, 0);
-        float[] pal = PALETTES[Math.max(0, Math.min(PALETTES.length - 1, paletteIndex))];
         GLES20.glUniform3fv(palette, 4, pal, 0);
         GLES20.glEnableVertexAttribArray(position);
         GLES20.glVertexAttribPointer(position, 2, GLES20.GL_FLOAT, false, 0, quad);
@@ -453,9 +457,61 @@ final class GlassScene {
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
     }
 
+    /** Палитра из настроек: готовая или свои цвета. */
+    static float[] palette(Prefs cfg) {
+        return palette(cfg.glassPalette, cfg.glassGlowHue, cfg.glassHaloHue,
+                cfg.glassSaturation, cfg.glassBrightness);
+    }
+
+    /** Палитра index (PALETTE_*); для PALETTE_CUSTOM — из своих оттенков (см. custom). */
+    static float[] palette(int index, int glowHue, int haloHue, int saturation, int brightness) {
+        if (index == PALETTE_CUSTOM) return custom(glowHue, haloHue, saturation, brightness);
+        return PALETTES[Math.max(0, Math.min(PALETTES.length - 1, index))].clone();
+    }
+
+    /**
+     * Свои цвета: оттенок свечения и ореола (градусы), насыщенность и яркость (%). Фон и
+     * подсветка углов — тёмные тона свечения. Насыщенность каждого цвета и яркость цветов
+     * относительно друг друга — как у «Янтаря» (при оттенках по умолчанию получается он), а
+     * светлота выровнена: синее свечение не выходит темнее жёлтого.
+     */
+    static float[] custom(int glowHue, int haloHue, int saturation, int brightness) {
+        float s = saturation / 100f;
+        float b = brightness / 100f;
+        float[] pal = new float[12];
+        customColor(pal, 0, glowHue + 6, 0.965f * s, 0.504f, b);
+        customColor(pal, 3, glowHue, 0.915f * s, 0.480f, b);
+        customColor(pal, 6, haloHue, 0.83f * s, 0.626f, b);
+        customColor(pal, 9, glowHue, 0.985f * s, 0.443f, b);
+        return pal;
+    }
+
+    /** Цвет оттенка hue с насыщенностью sat, по светлоте подогнанный к luma «Янтаря». */
+    private static void customColor(float[] pal, int offset, float hue, float sat, float luma,
+            float brightness) {
+        float h = ((hue % 360f) + 360f) % 360f / 60f;
+        int sector = Math.min(5, (int) h);
+        float f = h - sector;
+        float lo = 1f - sat;
+        float down = 1f - sat * f;
+        float up = 1f - sat * (1f - f);
+        float r, g, bl;
+        switch (sector) {
+            case 0: r = 1f; g = up; bl = lo; break;
+            case 1: r = down; g = 1f; bl = lo; break;
+            case 2: r = lo; g = 1f; bl = up; break;
+            case 3: r = lo; g = down; bl = 1f; break;
+            case 4: r = up; g = lo; bl = 1f; break;
+            default: r = 1f; g = lo; bl = down; break;
+        }
+        float k = brightness * (float) Math.sqrt(luma / (0.3f * r + 0.59f * g + 0.11f * bl));
+        pal[offset] = r * k;
+        pal[offset + 1] = g * k;
+        pal[offset + 2] = bl * k;
+    }
+
     /** Основные цвета палитры для системы (часы, палитра One UI): ореол, свечение, фон. */
-    static int[] colors(int paletteIndex) {
-        float[] pal = PALETTES[Math.max(0, Math.min(PALETTES.length - 1, paletteIndex))];
+    static int[] colors(float[] pal) {
         return new int[] {
                 tone(pal, 6, 1.6f), tone(pal, 3, 0.9f), tone(pal, 0, 0.2f)
         };

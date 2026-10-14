@@ -37,6 +37,13 @@ final class Prefs {
     // Источник: видео или сцена «Стекло»
     static final String KEY_SOURCE = "source";
     static final String KEY_GLASS_PALETTE = "glass_palette";
+    // Свои цвета стекла: оттенки (градусы), насыщенность и яркость (%)
+    static final String KEY_GLASS_GLOW_HUE = "glass_glow_hue";
+    static final String KEY_GLASS_HALO_HUE = "glass_halo_hue";
+    static final String KEY_GLASS_SATURATION = "glass_saturation";
+    static final String KEY_GLASS_BRIGHTNESS = "glass_brightness";
+    static final int MIN_GLASS_BRIGHTNESS = 50;
+    static final int MAX_GLASS_BRIGHTNESS = 150;
     static final String KEY_GLASS_DURATION = "glass_duration";
 
     static final String KEY_VIDEO_NAME = "video_name";
@@ -113,6 +120,11 @@ final class Prefs {
     final int source;
     /** Палитра стекла: GlassScene.PALETTE_*. */
     final int glassPalette;
+    /** Свои цвета стекла (GlassScene.PALETTE_CUSTOM): оттенки 0..359, насыщенность, яркость. */
+    final int glassGlowHue;
+    final int glassHaloHue;
+    final int glassSaturation;
+    final int glassBrightness;
     /** Длительность анимации стекла, мс. */
     final int glassDurationMs;
     final boolean reverseReady;
@@ -145,8 +157,15 @@ final class Prefs {
                 sp.getInt(KEY_ZOOM_DURATION, 7)));
         sound = sp.getBoolean(KEY_SOUND, false);
         source = sp.getInt(KEY_SOURCE, SOURCE_VIDEO) == SOURCE_GLASS ? SOURCE_GLASS : SOURCE_VIDEO;
-        glassPalette = Math.max(GlassScene.PALETTE_AMBER, Math.min(GlassScene.PALETTE_EMERALD,
+        glassPalette = Math.max(GlassScene.PALETTE_AMBER, Math.min(GlassScene.PALETTE_CUSTOM,
                 sp.getInt(KEY_GLASS_PALETTE, GlassScene.PALETTE_AMBER)));
+        glassGlowHue = Math.floorMod(
+                sp.getInt(KEY_GLASS_GLOW_HUE, GlassScene.DEFAULT_GLOW_HUE), 360);
+        glassHaloHue = Math.floorMod(
+                sp.getInt(KEY_GLASS_HALO_HUE, GlassScene.DEFAULT_HALO_HUE), 360);
+        glassSaturation = Math.max(0, Math.min(100, sp.getInt(KEY_GLASS_SATURATION, 100)));
+        glassBrightness = Math.max(MIN_GLASS_BRIGHTNESS, Math.min(MAX_GLASS_BRIGHTNESS,
+                sp.getInt(KEY_GLASS_BRIGHTNESS, 100)));
         glassDurationMs = 100 * Math.max(MIN_GLASS_DURATION, Math.min(MAX_GLASS_DURATION,
                 sp.getInt(KEY_GLASS_DURATION, 20)));
         reverseReady = sp.getBoolean(KEY_REVERSE_READY, false)

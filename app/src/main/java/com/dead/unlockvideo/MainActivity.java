@@ -91,6 +91,14 @@ public class MainActivity extends Activity {
     private LinearLayout videoGroup;
     private LinearLayout glassGroup;
     private int glassPalette;
+    /** Свои цвета стекла: оттенки, насыщенность, яркость (см. GlassScene.custom). */
+    private int glassGlowHue;
+    private int glassHaloHue;
+    private int glassSaturation;
+    private int glassBrightness;
+    private LinearLayout customColors;
+    private SeekBar saturationBar;
+    private SeekBar brightnessBar;
     private int glassDurationMs;
     /** Живое превью сцены в приложении. */
     private WallpaperRenderer glassRenderer;
@@ -177,6 +185,10 @@ public class MainActivity extends Activity {
         // Что показывать
         glass = cfg.glass();
         glassPalette = cfg.glassPalette;
+        glassGlowHue = cfg.glassGlowHue;
+        glassHaloHue = cfg.glassHaloHue;
+        glassSaturation = cfg.glassSaturation;
+        glassBrightness = cfg.glassBrightness;
         glassDurationMs = cfg.glassDurationMs;
         LinearLayout sourceIsland = island(root, "Обои");
         sourceChoice = new Segmented(sourceIsland, "Что показывать",
@@ -216,12 +228,50 @@ public class MainActivity extends Activity {
         glassParams.setMargins(dp(16), dp(16), dp(16), dp(16));
         glassIsland.addView(glassFrame, glassParams);
         new Segmented(glassIsland, "Цвет",
-                new String[] {"Янтарь", "Лёд", "Аметист", "Изумруд"}, glassPalette, index -> {
+                new String[] {"Янтарь", "Лёд", "Аметист", "Изумруд", "Свой"}, glassPalette,
+                index -> {
                     glassPalette = index;
                     sp.edit().putInt(Prefs.KEY_GLASS_PALETTE, index).apply();
                     Prefs.bumpRevision(this);
-                    if (glassRenderer != null) glassRenderer.setScene(index);
+                    customColors.setVisibility(index == GlassScene.PALETTE_CUSTOM
+                            ? View.VISIBLE : View.GONE);
+                    previewPalette();
                 });
+        // Свои цвета: видны, только когда выбран «Свой». Превью меняется прямо по ходу
+        // перетаскивания, обои — когда палец отпущен.
+        customColors = vertical();
+        glassIsland.addView(customColors);
+        customColors.setVisibility(glassPalette == GlassScene.PALETTE_CUSTOM
+                ? View.VISIBLE : View.GONE);
+        hueTrack(sliderRow(customColors, "Свечение", "Фон — тёмный тон этого цвета", 0, 359,
+                glassGlowHue, value -> value + "°",
+                value -> saveColor(Prefs.KEY_GLASS_GLOW_HUE, value),
+                value -> {
+                    glassGlowHue = value;
+                    updateColorTracks();
+                    previewPalette();
+                }));
+        hueTrack(sliderRow(customColors, "Ореол", null, 0, 359, glassHaloHue, value -> value + "°",
+                value -> saveColor(Prefs.KEY_GLASS_HALO_HUE, value),
+                value -> {
+                    glassHaloHue = value;
+                    previewPalette();
+                }));
+        saturationBar = seekBarOf(sliderRow(customColors, "Насыщенность", null, 0, 100,
+                glassSaturation, value -> value + "%",
+                value -> saveColor(Prefs.KEY_GLASS_SATURATION, value),
+                value -> {
+                    glassSaturation = value;
+                    previewPalette();
+                }));
+        brightnessBar = seekBarOf(sliderRow(customColors, "Яркость", null,
+                Prefs.MIN_GLASS_BRIGHTNESS, Prefs.MAX_GLASS_BRIGHTNESS, glassBrightness,
+                value -> value + "%", value -> saveColor(Prefs.KEY_GLASS_BRIGHTNESS, value),
+                value -> {
+                    glassBrightness = value;
+                    previewPalette();
+                }));
+        updateColorTracks();
         sliderRow(glassIsland, "Длительность анимации", null, Prefs.MIN_GLASS_DURATION,
                 Prefs.MAX_GLASS_DURATION, glassDurationMs / 100,
                 value -> String.format(java.util.Locale.ROOT, "%.1f с", value / 10f),
@@ -499,6 +549,55 @@ public class MainActivity extends Activity {
 
     // ---- Источник: видео или стекло ----
 
+    /** Текущая палитра стекла — в превью. */
+    private void previewPalette() {
+        if (glassRenderer == null) return;
+        glassRenderer.setScene(GlassScene.palette(glassPalette, glassGlowHue, glassHaloHue,
+                glassSaturation, glassBrightness));
+    }
+
+    /** Свой цвет отпущен — в настройки, обои перечитают их. */
+    private void saveColor(String key, int value) {
+        sp.edit().putInt(key, value).apply();
+        Prefs.bumpRevision(this);
+    }
+
+    /** Ползунок оттенка: дорожка — радуга. */
+    private void hueTrack(LinearLayout item) {
+        int[] colors = new int[13];
+        for (int i = 0; i < colors.length; i++) {
+            colors[i] = Color.HSVToColor(new float[] {i * 30f, 0.85f, 1f});
+        }
+        colorTrack(seekBarOf(item), colors);
+    }
+
+    /** Дорожки насыщенности и яркости — в цвет свечения. */
+    private void updateColorTracks() {
+        int pure = Color.HSVToColor(new float[] {glassGlowHue, 0.9f, 1f});
+        colorTrack(saturationBar, new int[] {0xffbdbdbd, pure});
+        int dark = Color.HSVToColor(new float[] {glassGlowHue, 0.9f, 0.35f});
+        colorTrack(brightnessBar, new int[] {dark, pure});
+    }
+
+    private void colorTrack(SeekBar bar, int[] colors) {
+        GradientDrawable track = new GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT, colors);
+        track.setCornerRadius(dp(4));
+        bar.setProgressDrawable(track);
+        bar.setProgressTintList(null);
+        bar.setProgressBackgroundTintList(null);
+        bar.setMinHeight(dp(8));
+        bar.setMaxHeight(dp(8));
+        bar.setThumbTintList(ColorStateList.valueOf(Color.WHITE));
+    }
+
+    private static SeekBar seekBarOf(LinearLayout item) {
+        for (int i = 0; i < item.getChildCount(); i++) {
+            if (item.getChildAt(i) instanceof SeekBar) return (SeekBar) item.getChildAt(i);
+        }
+        throw new IllegalStateException("в строке нет ползунка");
+    }
+
     private void updateSource() {
         videoGroup.setVisibility(glass ? View.GONE : View.VISIBLE);
         glassGroup.setVisibility(glass ? View.VISIBLE : View.GONE);
@@ -517,7 +616,7 @@ public class MainActivity extends Activity {
                     surface = new Surface(texture);
                     glassRenderer = WallpaperRenderer.create(surface, width, height);
                     if (glassRenderer == null) return;
-                    glassRenderer.setScene(glassPalette);
+                    previewPalette();
                     newGlassClip();
                 }
 
@@ -1036,6 +1135,13 @@ public class MainActivity extends Activity {
      */
     private LinearLayout sliderRow(LinearLayout island, String title, String subtitle, int min,
                                    int max, int value, IntFormat format, OnValue listener) {
+        return sliderRow(island, title, subtitle, min, max, value, format, listener, null);
+    }
+
+    /** То же, и live — на каждом шаге перетаскивания (например, для превью). */
+    private LinearLayout sliderRow(LinearLayout island, String title, String subtitle, int min,
+                                   int max, int value, IntFormat format, OnValue listener,
+                                   OnValue live) {
         LinearLayout item = vertical();
         LinearLayout header = new LinearLayout(this);
         header.setPadding(dp(24), dp(16), dp(24), 0);
@@ -1063,6 +1169,7 @@ public class MainActivity extends Activity {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 valueText.setText(format.format(progress));
+                if (fromUser && live != null) live.onValue(progress);
                 if (fromUser && !tracking) listener.onValue(progress);
             }
 
