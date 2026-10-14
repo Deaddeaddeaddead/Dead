@@ -4,6 +4,7 @@ import android.graphics.Bitmap;
 import android.graphics.SurfaceTexture;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.SystemClock;
 import android.util.Log;
 import android.view.Choreographer;
 import android.view.Surface;
@@ -46,18 +47,67 @@ final class WallpaperRenderer {
     private int viewWidth;
     private int viewHeight;
     private int active = SOURCE_FORWARD;
-    // Масштаб и сдвиг (в долях видимого кадра) — пишутся с главного потока.
-    private volatile float zoom = 1f;
+    // Добавочный масштаб (параллакс) и сдвиг (в долях видимого кадра) — пишутся с главного
+    // потока; масштаб от разблокировки — scale, считается на каждом кадре.
+    private volatile float zoom;
     private volatile float shiftX;
     private volatile float shiftY;
+    private volatile ScaleAnimation scale = new ScaleAnimation(1f, 1f, 0, 0, 0f, 0f);
+    /** Масштаб этого кадра — считается в начале draw. */
+    private float frameZoom = 1f;
     private final AtomicBoolean drawPosted = new AtomicBoolean();
     private final Runnable drawTransform = () -> {
         drawPosted.set(false);
-        // Сцена движется — следующий её кадр и так возьмёт новый масштаб и сдвиг; лишний
-        // кадр между ними сбил бы ровный ход анимации.
-        if (this.scenePalette != null && this.frameScheduled) return;
+        // Кадры и так идут (сцена или масштаб движутся) — следующий возьмёт новый масштаб и
+        // сдвиг; лишний кадр между ними сбил бы ровный ход.
+        if (this.frameScheduled) return;
         draw();
     };
+    private final Runnable drawAnimatedFrame = this::drawAnimated;
+
+    /**
+     * Масштаб от разблокировки: от from к to с момента start (SystemClock.uptimeMillis) за
+     * duration мс — в такт анимации сцены, пока её время идёт от sceneFrom к sceneTo
+     * (Easing.sceneSegment), или мягко (sceneFrom == sceneTo).
+     */
+    static final class ScaleAnimation {
+        final float from;
+        final float to;
+        final long start;
+        final int duration;
+        final float sceneFrom;
+        final float sceneTo;
+
+        ScaleAnimation(float from, float to, long start, int duration, float sceneFrom,
+                float sceneTo) {
+            this.from = from;
+            this.to = to;
+            this.start = start;
+            this.duration = duration;
+            this.sceneFrom = sceneFrom;
+            this.sceneTo = sceneTo;
+        }
+
+        float at(long now) {
+            if (duration <= 0 || now >= start + duration) return to;
+            return from + (to - from) * eased(Math.max(0f, (now - start) / (float) duration));
+        }
+
+        float eased(float t) {
+            return sceneFrom != sceneTo ? Easing.sceneSegment(t, sceneFrom, sceneTo)
+                    : Easing.soft(t, Easing.ZOOM_RAMP);
+        }
+
+        boolean running(long now) {
+            return duration > 0 && now < start + duration && from != to;
+        }
+
+        boolean same(ScaleAnimation other) {
+            return from == other.from && to == other.to && start == other.start
+                    && duration == other.duration && sceneFrom == other.sceneFrom
+                    && sceneTo == other.sceneTo;
+        }
+    }
     private int pending = -1;
     /** Неподвижный кадр (текстура) и его размер; 0 — нет. */
     private int stillTexture;
@@ -232,12 +282,12 @@ final class WallpaperRenderer {
     }
 
     /**
-     * Масштаб (1 — как есть) и сдвиг изображения в долях кадра без масштаба. Сдвиг
-     * ограничивается так, чтобы края кадра не показывались. Можно вызывать часто —
-     * лишние перерисовки схлопываются.
+     * Добавочный масштаб (0 — нет; складывается с масштабом от разблокировки) и сдвиг
+     * изображения в долях кадра без масштаба. Сдвиг ограничивается так, чтобы края кадра не
+     * показывались. Можно вызывать часто — лишние перерисовки схлопываются.
      */
     void setTransform(float zoom, float shiftX, float shiftY) {
-        float z = Math.max(1f, zoom);
+        float z = Math.max(0f, zoom);
         // Изменение меньше доли пикселя не видно — не тратим на него перерисовку.
         if (Math.abs(z - this.zoom) < TRANSFORM_EPSILON
                 && Math.abs(shiftX - this.shiftX) < TRANSFORM_EPSILON
@@ -248,6 +298,21 @@ final class WallpaperRenderer {
         this.shiftX = shiftX;
         this.shiftY = shiftY;
         if (drawPosted.compareAndSet(false, true)) handler.post(drawTransform);
+    }
+
+    /** Масштаб от разблокировки — сразу value. */
+    void setScale(float value) {
+        animateScale(new ScaleAnimation(value, value, 0, 0, 0f, 0f));
+    }
+
+    /**
+     * Масштаб от разблокировки — переход (см. ScaleAnimation). Считается на каждом кадре,
+     * кадры идут, пока он меняется, — ровно, в такт экрану.
+     */
+    void animateScale(ScaleAnimation next) {
+        if (next.same(scale)) return;
+        scale = next;
+        handler.post(drawAnimatedFrame);
     }
 
     /**
@@ -311,9 +376,20 @@ final class WallpaperRenderer {
 
     private void drawScene() {
         if (scenePalette == null) return;
+        drawAnimated();
+    }
+
+    /** Кадр и, если сцена или масштаб движутся, следующие — по кадрам экрана. */
+    private void drawAnimated() {
         draw();
+        if (needsFrames()) scheduleSceneFrame();
+    }
+
+    private boolean needsFrames() {
+        if (scale.running(SystemClock.uptimeMillis())) return true;
+        if (scenePalette == null) return false;
         SceneSource source = sceneSources[active];
-        if (source != null && source.animating()) scheduleSceneFrame();
+        return source != null && source.animating();
     }
 
     private void scheduleSceneFrame() {
@@ -329,7 +405,7 @@ final class WallpaperRenderer {
         frameScheduled = false;
         choreographer.removeFrameCallback(sceneFrame);
         handler.removeCallbacks(sceneFrameFallback);
-        drawScene();
+        drawAnimated();
     }
 
     void setVideoSize(int source, int width, int height) {
@@ -369,6 +445,7 @@ final class WallpaperRenderer {
 
     private void draw() {
         if (egl == null || viewWidth <= 0 || viewHeight <= 0) return;
+        frameZoom = Math.max(1f, scale.at(SystemClock.uptimeMillis()) + zoom);
         if (scenePalette != null) {
             SceneSource source = sceneSources[active];
             if (source == null) source = sceneSources[SOURCE_FORWARD];
@@ -432,8 +509,8 @@ final class WallpaperRenderer {
             }
         }
         // Видимая доля кадра с учётом масштаба; сдвиг — в пределах запаса от масштаба.
-        float visibleX = scaleX / zoom;
-        float visibleY = scaleY / zoom;
+        float visibleX = scaleX / frameZoom;
+        float visibleY = scaleY / frameZoom;
         float marginX = (scaleX - visibleX) / 2f;
         float marginY = (scaleY - visibleY) / 2f;
         crop[0] = visibleX;

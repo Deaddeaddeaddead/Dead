@@ -247,27 +247,34 @@ public class VideoWallpaperService extends WallpaperService {
         private float zoomTo;
         private long zoomStart;
         private int zoomDuration;
+        /** Переход масштаба как есть — для рендера и расчёта текущего масштаба. */
+        private WallpaperRenderer.ScaleAnimation zoomAnimation;
         /** Вместе с масштабом плавно вернуть параллакс в центр. */
         private boolean tiltToCenter;
         private float tiltFromX;
         private float tiltFromY;
+        // Сам масштаб считает рендер на каждом кадре (WallpaperRenderer.animateScale) — ровно и
+        // в такт анимации; здесь — возврат параллакса в центр и конец перехода.
         private final Runnable zoomStep = new Runnable() {
             @Override
             public void run() {
-                float t = Math.min(1f, (SystemClock.uptimeMillis() - zoomStart)
-                        / (float) Math.max(1, zoomDuration));
-                float eased = Easing.soft(t, Easing.ZOOM_RAMP); // мягкий старт и остановка
+                long now = SystemClock.uptimeMillis();
+                float t = Math.min(1f, Math.max(0f, (now - zoomStart) / (float) Math.max(1,
+                        zoomDuration)));
+                float eased = zoomAnimation.eased(t);
                 unlockScale = zoomFrom + (zoomTo - zoomFrom) * eased;
                 if (tiltToCenter) {
                     tiltX = tiltFromX * (1f - eased);
                     tiltY = tiltFromY * (1f - eased);
+                    applyTransform();
                 }
-                applyTransform();
                 if (t < 1f) {
                     handler.postDelayed(this, 16);
                 } else {
+                    unlockScale = zoomTo;
                     zoomAnimating = false;
                     tiltToCenter = false;
+                    applyTransform();
                 }
             }
         };
@@ -451,7 +458,7 @@ public class VideoWallpaperService extends WallpaperService {
             watchUnlock();
             setGyroscope(cfg.parallax > 0);
             // Появился экран блокировки — масштаб плавно возвращается к его состоянию.
-            if (!unlocked) animateUnlockZoom(lockScale(), lockZoomDuration());
+            if (!unlocked) zoomToLock();
             if (backFromApp && unlocked && cfg.startOnHome && !isPreview()) {
                 // Старт сразу, как только приложение начало закрываться. Если служба видит
                 // экран лаунчера — следим, не список ли это недавних (тогда пауза).
@@ -632,7 +639,7 @@ public class VideoWallpaperService extends WallpaperService {
             }
             watchUnlock();
             setGyroscope(visible && cfg.parallax > 0);
-            if (visible && !unlocked) animateUnlockZoom(lockScale(), lockZoomDuration());
+            if (visible && !unlocked) zoomToLock();
             if (startOnScreenOn()) {
                 log("запуск: включение экрана");
                 triggerForward(false);
@@ -654,7 +661,7 @@ public class VideoWallpaperService extends WallpaperService {
             unlocked = true;
             watchUnlock(); // дальше ждём, когда уберётся экран блокировки
             if (reversing) stopReverse();
-            if (!cfg.zoomOnDismiss) animateUnlockZoom(homeScale(), unlockZoomDuration());
+            if (!cfg.zoomOnDismiss) zoomToHome();
             if (cfg.startOnUnlock) {
                 log("запуск: разблокировка");
                 triggerForward(false);
@@ -869,8 +876,18 @@ public class VideoWallpaperService extends WallpaperService {
             // только от силы параллакса и не растёт от масштаба при разблокировке.
             float parallaxZoom = 1f + PARALLAX_MAX_ZOOM * cfg.parallax / 100f;
             float parallaxMargin = (1f - 1f / parallaxZoom) / 2f;
-            renderer.setTransform(unlockScale + parallaxZoom - 1f,
-                    tiltX * parallaxMargin, tiltY * parallaxMargin);
+            renderer.setTransform(parallaxZoom - 1f, tiltX * parallaxMargin,
+                    tiltY * parallaxMargin);
+            if (zoomAnimating) {
+                renderer.animateScale(zoomAnimation);
+            } else {
+                renderer.setScale(unlockScale);
+            }
+        }
+
+        /** Масштаб от разблокировки сейчас — с учётом идущего перехода. */
+        private float currentScale() {
+            return zoomAnimating ? zoomAnimation.at(SystemClock.uptimeMillis()) : unlockScale;
         }
 
         /**
@@ -896,11 +913,47 @@ public class VideoWallpaperService extends WallpaperService {
         }
 
         private void animateUnlockZoom(float target, int durationMs) {
-            animateTransform(target, durationMs, false);
+            animateTransform(target, durationMs, false, 0f, 0f);
         }
 
-        /** Плавно к масштабу target; с centerTilt — заодно вернуть параллакс в центр. */
+        /**
+         * К масштабу рабочего стола при разблокировке. У сцены с масштабом «как у видео» — в
+         * такт её анимации вперёд: с текущего места до конца.
+         */
+        private void zoomToHome() {
+            int duration = unlockZoomDuration();
+            if (glass && cfg.zoomSync && cfg.startOnUnlock && !finishedForever && forwardReady) {
+                int end = Math.max(1, forwardEndMs());
+                int position = forwardPosition();
+                float from = position >= end - END_EPSILON_MS ? 0f : position / (float) end;
+                animateTransform(homeScale(), duration, false, from, 1f);
+            } else {
+                animateUnlockZoom(homeScale(), duration);
+            }
+        }
+
+        /** К масштабу экрана блокировки; у сцены «как у видео» — в такт обратному ходу. */
+        private void zoomToLock() {
+            int duration = lockZoomDuration();
+            if (glass && cfg.zoomSync && needReverse && reverseAvailable && !startOnScreenOn()) {
+                float from = forwardPosition() / (float) Math.max(1, forwardEndMs());
+                animateTransform(lockScale(), duration, false, Math.min(1f, from), 0f);
+            } else {
+                animateUnlockZoom(lockScale(), duration);
+            }
+        }
+
         private void animateTransform(float target, int durationMs, boolean centerTilt) {
+            animateTransform(target, durationMs, centerTilt, 0f, 0f);
+        }
+
+        /**
+         * Плавно к масштабу target; с centerTilt — заодно вернуть параллакс в центр. Если время
+         * сцены идёт от sceneFrom к sceneTo (sceneFrom != sceneTo) — в такт её анимации, иначе
+         * мягко сам по себе.
+         */
+        private void animateTransform(float target, int durationMs, boolean centerTilt,
+                float sceneFrom, float sceneTo) {
             if (zoomAnimating && Math.abs(zoomTo - target) < 0.001f && !centerTilt) return;
             cancelUnlockZoom();
             boolean tiltMoved = centerTilt && (Math.abs(tiltX) > 0.001f || Math.abs(tiltY) > 0.001f);
@@ -909,17 +962,23 @@ public class VideoWallpaperService extends WallpaperService {
             zoomTo = target;
             zoomStart = SystemClock.uptimeMillis();
             zoomDuration = durationMs;
+            zoomAnimation = new WallpaperRenderer.ScaleAnimation(zoomFrom, zoomTo, zoomStart,
+                    durationMs, sceneFrom, sceneTo);
             tiltToCenter = tiltMoved;
             tiltFromX = tiltX;
             tiltFromY = tiltY;
             zoomAnimating = true;
+            applyTransform();
             handler.post(zoomStep);
         }
 
+        /** Переход масштаба прерван — масштаб остаётся, где был. */
         private void cancelUnlockZoom() {
+            if (zoomAnimating) unlockScale = currentScale();
             handler.removeCallbacks(zoomStep);
             zoomAnimating = false;
             tiltToCenter = false;
+            if (renderer != null) renderer.setScale(unlockScale);
         }
 
         /** Гироскоп работает, только пока обои видны и параллакс включён. */
@@ -1001,7 +1060,7 @@ public class VideoWallpaperService extends WallpaperService {
             if (keyguardGone) return;
             keyguardGone = true;
             log("экран блокировки убран");
-            if (cfg.zoomOnDismiss) animateUnlockZoom(homeScale(), unlockZoomDuration());
+            if (cfg.zoomOnDismiss) zoomToHome();
         }
 
         /**
