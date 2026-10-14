@@ -620,14 +620,20 @@ public class VideoWallpaperService extends WallpaperService {
         @Override
         public void onSharedPreferenceChanged(SharedPreferences prefs, String key) {
             if (isPreview()) {
-                // Превью — неподвижный кадр: обновляем его и масштаб.
+                // Превью: кадр, масштаб и видео по новым настройкам; новое видео — с начала.
                 if (Prefs.KEY_REVISION.equals(key) || Prefs.KEY_PLAY_NOW.equals(key)) {
+                    if (Prefs.KEY_PLAY_NOW.equals(key)) {
+                        closePlayers();
+                        positionMs = 0;
+                    }
                     loadConfig();
                     cancelUnlockZoom();
                     unlockScale = previewScale();
                     setGyroscope(visible && cfg.parallax > 0);
                     applyTransform();
                     loadStill(true);
+                    if (forward == null) openPlayers();
+                    resume();
                 }
                 return;
             }
@@ -684,14 +690,15 @@ public class VideoWallpaperService extends WallpaperService {
         }
 
         /**
-         * Неподвижный кадр в фоне: в превью он и есть изображение (без декодеров видео), у
-         * обоев — виден до первого кадра плеера (show), если видео стоит в начале или в конце.
+         * Неподвижный кадр в фоне: виден до первого кадра плеера (show) — в превью всегда,
+         * у обоев — если видео стоит в начале или в конце.
          * По кадру покоя считаются цвета обоев для системы.
          */
         private void loadStill(boolean show) {
             WallpaperRenderer target = renderer;
             boolean restEnd = restAtEnd();
-            boolean showEnd = isPreview() ? restEnd : positionMs == AT_END;
+            // Показываем кадр, с которого пойдёт видео (в превью — с начала).
+            boolean showEnd = positionMs == AT_END;
             boolean visibleStill = show && target != null
                     && (isPreview() || positionMs == 0 || positionMs == AT_END);
             int width = surfaceWidth;
@@ -1064,15 +1071,16 @@ public class VideoWallpaperService extends WallpaperService {
         // ---- Плееры ----
 
         private void openPlayers() {
-            // Превью — только неподвижный кадр: декодеры видео не занимаем (их число
-            // ограничено, а настоящие обои уже держат свои), батарею не тратим.
-            if (isPreview() || renderer == null || forward != null) return;
+            if (renderer == null || forward != null) return;
             Context context = VideoWallpaperService.this;
             File video = Prefs.videoFile(context);
             if (!video.isFile()) return;
-            forward = createPlayer(video, WallpaperRenderer.SOURCE_FORWARD, cfg.sound);
+            // Превью: видео по кругу и без звука поверх неподвижного кадра; если декодера
+            // не хватит (настоящие обои держат свои), останется кадр.
+            forward = createPlayer(video, WallpaperRenderer.SOURCE_FORWARD,
+                    cfg.sound && !isPreview());
             if (forward != null) {
-                forward.setLooping(cfg.infinite());
+                forward.setLooping(cfg.infinite() || isPreview());
                 forward.setOnPreparedListener(mp -> {
                     if (mp != forward) return;
                     forwardReady = true;
@@ -1087,7 +1095,7 @@ public class VideoWallpaperService extends WallpaperService {
                 forward.setOnCompletionListener(this::onForwardCompleted);
                 forward.prepareAsync();
             }
-            if (reverseAvailable) {
+            if (reverseAvailable && !isPreview()) {
                 backward = createPlayer(Prefs.reverseFile(context),
                         WallpaperRenderer.SOURCE_REVERSE, false);
                 if (backward != null) {
