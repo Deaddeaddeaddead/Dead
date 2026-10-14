@@ -7,7 +7,9 @@ import android.opengl.EGLDisplay;
 import android.opengl.EGLExt;
 import android.opengl.EGLSurface;
 import android.opengl.GLES11Ext;
+import android.graphics.Bitmap;
 import android.opengl.GLES20;
+import android.opengl.GLUtils;
 import android.view.Surface;
 
 import java.io.IOException;
@@ -15,7 +17,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 
-/** EGL-окружение и отрисовка кадра видео (внешней текстуры). */
+/** EGL-окружение и отрисовка кадра: видео (внешняя текстура) или картинки. */
 final class GlUtil {
     private GlUtil() {
     }
@@ -97,42 +99,63 @@ final class GlUtil {
                 + "  vec2 tc = aTexCoord * uCrop.xy + uCrop.zw;\n"
                 + "  vTexCoord = (uTexMatrix * vec4(tc, 0.0, 1.0)).xy;\n"
                 + "}\n";
-        private static final String FRAGMENT_SHADER =
-                "#extension GL_OES_EGL_image_external : require\n"
-                // mediump на больших кадрах даёт «ступеньки» и мыло — нужна высокая точность.
-                + "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
+        // mediump на больших кадрах даёт «ступеньки» и мыло — нужна высокая точность.
+        private static final String PRECISION =
+                "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
                 + "precision highp float;\n"
                 + "#else\n"
                 + "precision mediump float;\n"
-                + "#endif\n"
+                + "#endif\n";
+        private static final String FRAGMENT_SHADER =
+                "#extension GL_OES_EGL_image_external : require\n"
+                + PRECISION
                 + "varying vec2 vTexCoord;\n"
                 + "uniform samplerExternalOES sTexture;\n"
                 + "void main() {\n"
                 + "  gl_FragColor = texture2D(sTexture, vTexCoord);\n"
                 + "}\n";
+        private static final String FRAGMENT_SHADER_2D =
+                PRECISION
+                + "varying vec2 vTexCoord;\n"
+                + "uniform sampler2D sTexture;\n"
+                + "void main() {\n"
+                + "  gl_FragColor = texture2D(sTexture, vTexCoord);\n"
+                + "}\n";
+        /** Картинка в памяти идёт сверху вниз, а координаты текстуры — снизу вверх. */
+        static final float[] FLIP_Y = {1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1};
 
         final int textureId;
-        private final int program;
-        private final int positionHandle;
-        private final int texCoordHandle;
-        private final int matrixHandle;
-        private final int cropHandle;
+        private final Program external;
+        /** Для картинок — создаётся при первой картинке. */
+        private Program flat;
         private final FloatBuffer positions = floats(-1, -1, 1, -1, -1, 1, 1, 1);
         private final FloatBuffer texCoords = floats(0, 0, 1, 0, 0, 1, 1, 1);
 
-        FrameDrawer() throws IOException {
-            program = GLES20.glCreateProgram();
-            GLES20.glAttachShader(program, shader(GLES20.GL_VERTEX_SHADER, VERTEX_SHADER));
-            GLES20.glAttachShader(program, shader(GLES20.GL_FRAGMENT_SHADER, FRAGMENT_SHADER));
-            GLES20.glLinkProgram(program);
-            int[] status = new int[1];
-            GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, status, 0);
-            if (status[0] != GLES20.GL_TRUE) throw new IOException("шейдер не собрался");
-            positionHandle = GLES20.glGetAttribLocation(program, "aPosition");
-            texCoordHandle = GLES20.glGetAttribLocation(program, "aTexCoord");
-            matrixHandle = GLES20.glGetUniformLocation(program, "uTexMatrix");
-            cropHandle = GLES20.glGetUniformLocation(program, "uCrop");
+        /** Шейдерная программа с обрезкой и матрицей текстуры. */
+        private static final class Program {
+            final int id;
+            final int position;
+            final int texCoord;
+            final int matrix;
+            final int crop;
 
+            Program(String fragment) throws IOException {
+                id = GLES20.glCreateProgram();
+                GLES20.glAttachShader(id, shader(GLES20.GL_VERTEX_SHADER, VERTEX_SHADER));
+                GLES20.glAttachShader(id, shader(GLES20.GL_FRAGMENT_SHADER, fragment));
+                GLES20.glLinkProgram(id);
+                int[] status = new int[1];
+                GLES20.glGetProgramiv(id, GLES20.GL_LINK_STATUS, status, 0);
+                if (status[0] != GLES20.GL_TRUE) throw new IOException("шейдер не собрался");
+                position = GLES20.glGetAttribLocation(id, "aPosition");
+                texCoord = GLES20.glGetAttribLocation(id, "aTexCoord");
+                matrix = GLES20.glGetUniformLocation(id, "uTexMatrix");
+                crop = GLES20.glGetUniformLocation(id, "uCrop");
+            }
+        }
+
+        FrameDrawer() throws IOException {
+            external = new Program(FRAGMENT_SHADER);
             textureId = createExternalTexture();
         }
 
@@ -151,6 +174,41 @@ final class GlUtil {
             GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
                     GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
             return textureId;
+        }
+
+        /**
+         * Загружает картинку в обычную текстуру; слишком большую сначала уменьшает.
+         * Возвращает номер текстуры; картинку не освобождает.
+         */
+        static int createTexture(Bitmap bitmap) {
+            int[] max = new int[1];
+            GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_SIZE, max, 0);
+            Bitmap upload = bitmap;
+            int longest = Math.max(bitmap.getWidth(), bitmap.getHeight());
+            if (max[0] > 0 && longest > max[0]) {
+                float scale = max[0] / (float) longest;
+                upload = Bitmap.createScaledBitmap(bitmap,
+                        Math.max(1, Math.round(bitmap.getWidth() * scale)),
+                        Math.max(1, Math.round(bitmap.getHeight() * scale)), true);
+            }
+            int[] textures = new int[1];
+            GLES20.glGenTextures(1, textures, 0);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textures[0]);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER,
+                    GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER,
+                    GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S,
+                    GLES20.GL_CLAMP_TO_EDGE);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T,
+                    GLES20.GL_CLAMP_TO_EDGE);
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, upload, 0);
+            if (upload != bitmap) upload.recycle();
+            return textures[0];
+        }
+
+        static void deleteTexture(int texture) {
+            GLES20.glDeleteTextures(1, new int[] {texture}, 0);
         }
 
         void clear(int width, int height) {
@@ -172,16 +230,33 @@ final class GlUtil {
         /** offsetX/offsetY — левый нижний угол видимой части кадра (0..1). */
         void draw(int texture, float[] texMatrix, int width, int height, float scaleX,
                   float scaleY, float offsetX, float offsetY) {
+            render(external, GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texture, texMatrix, width,
+                    height, scaleX, scaleY, offsetX, offsetY);
+        }
+
+        /** То же для картинки из createTexture. */
+        void drawImage(int texture, int width, int height, float scaleX, float scaleY,
+                       float offsetX, float offsetY) throws IOException {
+            if (flat == null) flat = new Program(FRAGMENT_SHADER_2D);
+            render(flat, GLES20.GL_TEXTURE_2D, texture, FLIP_Y, width, height, scaleX, scaleY,
+                    offsetX, offsetY);
+        }
+
+        private void render(Program program, int target, int texture, float[] texMatrix,
+                            int width, int height, float scaleX, float scaleY, float offsetX,
+                            float offsetY) {
             clear(width, height);
-            GLES20.glUseProgram(program);
+            GLES20.glUseProgram(program.id);
             GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, texture);
-            GLES20.glUniformMatrix4fv(matrixHandle, 1, false, texMatrix, 0);
-            GLES20.glUniform4f(cropHandle, scaleX, scaleY, offsetX, offsetY);
-            GLES20.glEnableVertexAttribArray(positionHandle);
-            GLES20.glVertexAttribPointer(positionHandle, 2, GLES20.GL_FLOAT, false, 0, positions);
-            GLES20.glEnableVertexAttribArray(texCoordHandle);
-            GLES20.glVertexAttribPointer(texCoordHandle, 2, GLES20.GL_FLOAT, false, 0, texCoords);
+            GLES20.glBindTexture(target, texture);
+            GLES20.glUniformMatrix4fv(program.matrix, 1, false, texMatrix, 0);
+            GLES20.glUniform4f(program.crop, scaleX, scaleY, offsetX, offsetY);
+            GLES20.glEnableVertexAttribArray(program.position);
+            GLES20.glVertexAttribPointer(program.position, 2, GLES20.GL_FLOAT, false, 0,
+                    positions);
+            GLES20.glEnableVertexAttribArray(program.texCoord);
+            GLES20.glVertexAttribPointer(program.texCoord, 2, GLES20.GL_FLOAT, false, 0,
+                    texCoords);
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         }
 

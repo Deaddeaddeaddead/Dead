@@ -1,5 +1,6 @@
 package com.dead.unlockvideo;
 
+import android.graphics.Bitmap;
 import android.graphics.SurfaceTexture;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -14,7 +15,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Рисует кадры видео на поверхность обоев через OpenGL на своём потоке: обрезает видео
  * под экран, масштабирует и сдвигает его (эффекты). Источников два — оригинал и обратное видео, на экран
  * выводится один; переключение происходит, когда у нового источника появляется кадр,
- * чтобы не мигнуть устаревшей картинкой.
+ * чтобы не мигнуть устаревшей картинкой. Пока у видео нет кадра, показывается неподвижный
+ * кадр-картинка (если задан).
  */
 final class WallpaperRenderer {
     private static final String TAG = "WallpaperRenderer";
@@ -45,6 +47,12 @@ final class WallpaperRenderer {
         draw();
     };
     private int pending = -1;
+    /** Неподвижный кадр (текстура) и его размер; 0 — нет. */
+    private int stillTexture;
+    private int stillWidth;
+    private int stillHeight;
+    /** Обрезка под экран: доля кадра по X и Y, левый нижний угол. */
+    private final float[] crop = new float[4];
 
     private final Runnable forceSwitch = () -> {
         if (pending >= 0) {
@@ -190,6 +198,33 @@ final class WallpaperRenderer {
         if (drawPosted.compareAndSet(false, true)) handler.post(drawTransform);
     }
 
+    /**
+     * Неподвижный кадр — виден, пока у видео нет своего кадра (в превью — всегда).
+     * Картинку забирает и освобождает сам.
+     */
+    void showStill(Bitmap bitmap) {
+        boolean posted = handler.post(() -> {
+            Input input = inputs[active];
+            if (egl == null || (input != null && input.hasFrame)) {
+                bitmap.recycle();
+                return;
+            }
+            deleteStill();
+            stillTexture = GlUtil.FrameDrawer.createTexture(bitmap);
+            stillWidth = bitmap.getWidth();
+            stillHeight = bitmap.getHeight();
+            bitmap.recycle();
+            draw();
+        });
+        if (!posted) bitmap.recycle();
+    }
+
+    private void deleteStill() {
+        if (stillTexture == 0) return;
+        GlUtil.FrameDrawer.deleteTexture(stillTexture);
+        stillTexture = 0;
+    }
+
     void setVideoSize(int source, int width, int height) {
         handler.post(() -> {
             Input input = inputs[source];
@@ -223,21 +258,41 @@ final class WallpaperRenderer {
     }
 
     private void draw() {
+        if (egl == null || viewWidth <= 0 || viewHeight <= 0) return;
         Input input = inputs[active];
-        if (egl == null || input == null || !input.hasFrame
-                || viewWidth <= 0 || viewHeight <= 0) {
+        if (input != null && input.hasFrame) {
+            // Видео пошло — картинка больше не нужна.
+            deleteStill();
+            computeCrop(input.videoWidth, input.videoHeight);
+            drawer.draw(input.textureId, input.matrix, viewWidth, viewHeight,
+                    crop[0], crop[1], crop[2], crop[3]);
+        } else if (stillTexture != 0) {
+            computeCrop(stillWidth, stillHeight);
+            try {
+                drawer.drawImage(stillTexture, viewWidth, viewHeight,
+                        crop[0], crop[1], crop[2], crop[3]);
+            } catch (java.io.IOException e) {
+                Log.w(TAG, "still shader failed", e);
+                deleteStill();
+                return;
+            }
+        } else {
             return;
         }
+        egl.swap(-1);
+    }
+
+    /** Кадр width×height закрывает экран целиком (лишнее обрезается), плюс масштаб и сдвиг. */
+    private void computeCrop(int width, int height) {
         float scaleX = 1f;
         float scaleY = 1f;
-        if (input.videoWidth > 0 && input.videoHeight > 0) {
-            float videoAspect = input.videoWidth / (float) input.videoHeight;
+        if (width > 0 && height > 0) {
+            float frameAspect = width / (float) height;
             float viewAspect = viewWidth / (float) viewHeight;
-            // Заполняем экран целиком, лишнее обрезаем по краям.
-            if (videoAspect > viewAspect) {
-                scaleX = viewAspect / videoAspect;
+            if (frameAspect > viewAspect) {
+                scaleX = viewAspect / frameAspect;
             } else {
-                scaleY = videoAspect / viewAspect;
+                scaleY = frameAspect / viewAspect;
             }
         }
         // Видимая доля кадра с учётом масштаба; сдвиг — в пределах запаса от масштаба.
@@ -245,12 +300,9 @@ final class WallpaperRenderer {
         float visibleY = scaleY / zoom;
         float marginX = (scaleX - visibleX) / 2f;
         float marginY = (scaleY - visibleY) / 2f;
-        float offsetX = 0.5f - visibleX / 2f
-                + Math.max(-marginX, Math.min(marginX, shiftX * scaleX));
-        float offsetY = 0.5f - visibleY / 2f
-                + Math.max(-marginY, Math.min(marginY, shiftY * scaleY));
-        drawer.draw(input.textureId, input.matrix, viewWidth, viewHeight,
-                visibleX, visibleY, offsetX, offsetY);
-        egl.swap(-1);
+        crop[0] = visibleX;
+        crop[1] = visibleY;
+        crop[2] = 0.5f - visibleX / 2f + Math.max(-marginX, Math.min(marginX, shiftX * scaleX));
+        crop[3] = 0.5f - visibleY / 2f + Math.max(-marginY, Math.min(marginY, shiftY * scaleY));
     }
 }

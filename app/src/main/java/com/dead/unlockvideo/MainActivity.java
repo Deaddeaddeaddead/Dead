@@ -22,7 +22,6 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.LayerDrawable;
 import android.graphics.Typeface;
-import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -434,28 +433,15 @@ public class MainActivity extends Activity {
         updateHero();
         if (!hasVideo) return;
 
-        File video = Prefs.videoFile(this);
+        // Первый кадр берётся из готовых неподвижных кадров (они же — для превью обоев).
+        Context app = getApplicationContext();
+        int width = getResources().getDisplayMetrics().widthPixels;
+        int height = dp(190);
         new Thread(() -> {
-            Bitmap frame = null;
-            MediaMetadataRetriever retriever = new MediaMetadataRetriever();
-            try {
-                retriever.setDataSource(video.getAbsolutePath());
-                frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST);
-                int maxWidth = getResources().getDisplayMetrics().widthPixels;
-                if (frame != null && frame.getWidth() > maxWidth) {
-                    int height = Math.round(frame.getHeight() * (float) maxWidth / frame.getWidth());
-                    frame = Bitmap.createScaledBitmap(frame, maxWidth, height, true);
-                }
-            } catch (RuntimeException ignored) {
-            } finally {
-                try {
-                    retriever.release();
-                } catch (Exception ignored) {
-                }
-            }
-            Bitmap result = frame;
+            Bitmap frame = Stills.ensure(app) ? Stills.load(Stills.first(app), width, height)
+                    : null;
             runOnUiThread(() -> {
-                if (!isDestroyed()) thumbnail.setImageBitmap(result);
+                if (!isDestroyed()) thumbnail.setImageBitmap(frame);
             });
         }).start();
     }

@@ -1,11 +1,14 @@
 package com.dead.unlockvideo;
 
 import android.app.KeyguardManager;
+import android.app.WallpaperColors;
+import android.app.WallpaperManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -185,6 +188,15 @@ public class VideoWallpaperService extends WallpaperService {
             }
         };
 
+        /** Цвета обоев для системы (часы, палитра) — по неподвижному кадру. */
+        private volatile WallpaperColors colors;
+        private int surfaceWidth;
+        private int surfaceHeight;
+        /** Номер последнего запроса неподвижного кадра — старые результаты не применяем. */
+        private volatile int stillRequest;
+        /** Для какого кадра покоя (последнего или первого) посчитаны цвета. */
+        private Boolean colorsAtEnd;
+
         /** Пока открыто приложение, видео уже перемотано в начало к возврату. */
         private boolean preparedForHome;
         private int homeRestorePosition;
@@ -309,7 +321,7 @@ public class VideoWallpaperService extends WallpaperService {
             sensorManager = context.getSystemService(SensorManager.class);
             gyroscope = sensorManager == null ? null
                     : sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
-            unlockScale = unlocked ? homeScale() : lockScale();
+            unlockScale = isPreview() ? previewScale() : unlocked ? homeScale() : lockScale();
             phase = finishedForever ? PHASE_DONE : PHASE_WAITING;
             log("обои запущены, реверс " + (reverseAvailable ? "готов" : "недоступен"));
             positionMs = finishedForever && cfg.endOnLastFrame && cfg.lockAction == Prefs.LOCK_KEEP
@@ -335,9 +347,16 @@ public class VideoWallpaperService extends WallpaperService {
         @Override
         public void onSurfaceChanged(SurfaceHolder holder, int format, int width, int height) {
             super.onSurfaceChanged(holder, format, width, height);
+            surfaceWidth = width;
+            surfaceHeight = height;
             if (renderer == null) {
                 renderer = WallpaperRenderer.create(holder.getSurface(), width, height);
+                if (isPreview()) {
+                    log("превью: поверхность " + width + "×" + height + ", флаги "
+                            + getWallpaperFlags());
+                }
                 applyTransform();
+                loadStill(true);
                 openPlayers();
             } else {
                 renderer.setViewSize(width, height);
@@ -600,6 +619,18 @@ public class VideoWallpaperService extends WallpaperService {
 
         @Override
         public void onSharedPreferenceChanged(SharedPreferences prefs, String key) {
+            if (isPreview()) {
+                // Превью — неподвижный кадр: обновляем его и масштаб.
+                if (Prefs.KEY_REVISION.equals(key) || Prefs.KEY_PLAY_NOW.equals(key)) {
+                    loadConfig();
+                    cancelUnlockZoom();
+                    unlockScale = previewScale();
+                    setGyroscope(visible && cfg.parallax > 0);
+                    applyTransform();
+                    loadStill(true);
+                }
+                return;
+            }
             if (Prefs.KEY_REVISION.equals(key)) {
                 // Новые настройки, текущее воспроизведение сохраняем. Плееры пересоздаём,
                 // только если поменялось, есть ли обратное видео.
@@ -624,6 +655,8 @@ public class VideoWallpaperService extends WallpaperService {
                 unlockScale = unlocked ? homeScale() : lockScale();
                 setGyroscope(visible && cfg.parallax > 0);
                 applyTransform();
+                // Кадр покоя сменился — пересчитать цвета для системы.
+                if (colorsAtEnd == null || colorsAtEnd != restAtEnd()) loadStill(false);
             } else if (Prefs.KEY_PLAY_NOW.equals(key)) {
                 // «Проиграть сейчас» или новое видео: с начала, как только обои станут видны.
                 closePlayers();
@@ -633,7 +666,77 @@ public class VideoWallpaperService extends WallpaperService {
                 needReverse = false;
                 armed = true;
                 openPlayers();
+                loadStill(false); // новое видео — новые цвета
             }
+        }
+
+        /** Кадр покоя: последний, если видео так и остаётся в конце, иначе первый. */
+        private boolean restAtEnd() {
+            return cfg.lockAction == Prefs.LOCK_KEEP && cfg.endOnLastFrame && !cfg.infinite();
+        }
+
+        /** Превью только экрана блокировки — с его масштабом, остальные — рабочего стола. */
+        private float previewScale() {
+            int flags = getWallpaperFlags();
+            boolean lockOnly = (flags & WallpaperManager.FLAG_LOCK) != 0
+                    && (flags & WallpaperManager.FLAG_SYSTEM) == 0;
+            return lockOnly ? lockScale() : homeScale();
+        }
+
+        /**
+         * Неподвижный кадр в фоне: в превью он и есть изображение (без декодеров видео), у
+         * обоев — виден до первого кадра плеера (show), если видео стоит в начале или в конце.
+         * По кадру покоя считаются цвета обоев для системы.
+         */
+        private void loadStill(boolean show) {
+            WallpaperRenderer target = renderer;
+            boolean restEnd = restAtEnd();
+            boolean showEnd = isPreview() ? restEnd : positionMs == AT_END;
+            boolean visibleStill = show && target != null
+                    && (isPreview() || positionMs == 0 || positionMs == AT_END);
+            int width = surfaceWidth;
+            int height = surfaceHeight;
+            int request = ++stillRequest;
+            Context context = VideoWallpaperService.this;
+            new Thread(() -> {
+                long start = SystemClock.uptimeMillis();
+                if (!Stills.ensure(context)) return;
+                Bitmap rest = Stills.load(restEnd ? Stills.last(context) : Stills.first(context),
+                        width, height);
+                if (rest == null || request != stillRequest) return;
+                WallpaperColors computed = WallpaperColors.fromBitmap(rest);
+                Bitmap shown = null;
+                if (visibleStill) {
+                    shown = showEnd == restEnd ? rest : Stills.load(
+                            showEnd ? Stills.last(context) : Stills.first(context), width, height);
+                }
+                if (shown != rest) rest.recycle();
+                Bitmap still = shown;
+                long took = SystemClock.uptimeMillis() - start;
+                handler.post(() -> {
+                    if (request != stillRequest) {
+                        if (still != null) still.recycle();
+                        return;
+                    }
+                    if (still != null && renderer == target && target != null) {
+                        target.showStill(still);
+                        if (isPreview()) {
+                            log("превью: неподвижный кадр (" + (showEnd ? "последний" : "первый")
+                                    + ") за " + took + "мс");
+                        }
+                    } else if (still != null) {
+                        still.recycle();
+                    }
+                    colors = computed;
+                    colorsAtEnd = restEnd;
+                    notifyColorsChanged();
+                });
+            }, "wallpaper-still").start();
+        }
+
+        @Override
+        public WallpaperColors onComputeColors() {
+            return colors;
         }
 
         private void loadConfig() {
@@ -961,7 +1064,9 @@ public class VideoWallpaperService extends WallpaperService {
         // ---- Плееры ----
 
         private void openPlayers() {
-            if (renderer == null || forward != null) return;
+            // Превью — только неподвижный кадр: декодеры видео не занимаем (их число
+            // ограничено, а настоящие обои уже держат свои), батарею не тратим.
+            if (isPreview() || renderer == null || forward != null) return;
             Context context = VideoWallpaperService.this;
             File video = Prefs.videoFile(context);
             if (!video.isFile()) return;
