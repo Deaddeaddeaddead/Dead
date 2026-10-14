@@ -32,11 +32,30 @@ final class GlassScene {
     static final int PALETTE_ICE = 1;
     static final int PALETTE_AMETHYST = 2;
     static final int PALETTE_EMERALD = 3;
-    /** Свои цвета: оттенки, насыщенность и яркость из настроек (см. custom). */
+    /** Свои цвета: у каждой части сцены свой (см. custom). */
     static final int PALETTE_CUSTOM = 4;
-    /** Свои цвета по умолчанию дают «Янтарь». */
+
+    /** Части сцены со своим цветом: номера в массиве цветов (см. custom). */
+    static final int COLOR_BACKGROUND = 0;
+    static final int COLOR_GLOW = 1;
+    static final int COLOR_LIGHT = 2;
+    static final int COLOR_CORNERS = 3;
+    static final int COLOR_GLASS_TOP = 4;
+    static final int COLOR_GLASS_BOTTOM = 5;
+    static final int COLOR_COUNT = 6;
+    /** Свои цвета по умолчанию (и прежние настройки «оттенок / насыщенность») дают «Янтарь». */
     static final int DEFAULT_GLOW_HUE = 13;
     static final int DEFAULT_HALO_HUE = 25;
+    /**
+     * Светлота цвета каждой части у «Янтаря» (0.3 R + 0.59 G + 0.11 B): свои цвета
+     * подгоняются к ней, чтобы синее не выходило темнее жёлтого.
+     */
+    private static final float[] COLOR_LUMA = {0.504f, 0.480f, 0.626f, 0.443f, 0.480f, 0.480f};
+    /**
+     * Палитра для шейдера — 20 чисел: фон, свечение внутри, ореол, подсветка углов (uPal),
+     * верхнее и нижнее стекло (uGlass), тонировка стёкол 0..1 (uTint).
+     */
+    private static final int PALETTE_SIZE = 20;
     /** Оттенки: фон, свечение внутри стекла, ореол, подсветка углов фона. */
     private static final float[][] PALETTES = {
             {1.0f, 0.34f, 0.035f, 1.0f, 0.29f, 0.085f, 1.0f, 0.52f, 0.17f, 1.0f, 0.24f, 0.015f},
@@ -88,6 +107,10 @@ final class GlassScene {
             + "uniform vec2 uView;\n"
             + "// 0 — фон, 1 — свечение внутри (угли), 2 — ореол, 3 — подсветка углов фона\n"
             + "uniform vec3 uPal[4];\n"
+            + "// Стёкла (верхнее, нижнее): цвет канта и света внутри стекла и доля, на которую\n"
+            + "// стекло перекрашивает вид сквозь себя в свой цвет (0 — прозрачное).\n"
+            + "uniform vec3 uGlass[2];\n"
+            + "uniform vec2 uTint;\n"
             + "\n"
             + "const float ASPECT = 2.175;\n"
             + "const float PI = 3.14159265;\n"
@@ -341,6 +364,11 @@ final class GlassScene {
             + "    float tir = 1.0 - smoothstep(mix(C_ST, C_CAP, capW) - mix(HW_ST, HW_CAP, capW),\n"
             + "        mix(C_ST, C_CAP, capW) + mix(HW_ST, HW_CAP, capW), tirB);\n"
             + "    vec3 content = back(q, pxw, 1.0);\n"
+            + "    vec3 glassColor = isTop ? uGlass[0] : uGlass[1];\n"
+            + "    // Тонировка: вид сквозь стекло — в цвет стекла при той же яркости.\n"
+            + "    const vec3 LUMA = vec3(0.3, 0.59, 0.11);\n"
+            + "    vec3 tinted = glassColor * (dot(content, LUMA) / dot(glassColor, LUMA));\n"
+            + "    content = mix(content, tinted, isTop ? uTint.x : uTint.y);\n"
             + "    // Свечение, расходящееся от канта внутрь стекла: его сила по контуру снята с видео\n"
             + "    // отдельно от яркости канта (на остриях торцов кант яркий, а свечения нет).\n"
             + "    vec4 g4 = light(perimS, 4.0);\n"
@@ -349,7 +377,8 @@ final class GlassScene {
             + "    float broadV = isTop ? r.b : r.a;\n"
             + "    // Кант разгорается не с самой кромки, а за ~2.5 тысячных внутрь.\n"
             + "    float rimK = smoothstep(RAMP0, RAMP1, s);\n"
-            + "    vec3 glass = mix(content, uPal[1] * bandV * RIM_GAIN * rimK, tir) + uPal[1] * (1.0 - tir) * GLOW_GAIN * rimK\n"
+            + "    vec3 glass = mix(content, glassColor * bandV * RIM_GAIN * rimK, tir)\n"
+            + "        + glassColor * (1.0 - tir) * GLOW_GAIN * rimK\n"
             + "        * (glowV * (0.51 * exp(-sT / 0.004) + 0.25 * exp(-sT / 0.016)) + broadV * exp(-sT / 0.04))\n"
             + "        * (1.0 - smoothstep(0.12, 0.2, s));\n"
             + "    c = mix(c, glass, smoothstep(pxw, -pxw, d));\n"
@@ -368,6 +397,8 @@ final class GlassScene {
     private final int time;
     private final int lightUniform;
     private final int palette;
+    private final int glassColor;
+    private final int glassTint;
     private final int view;
     private final int lightTexture;
     private final FloatBuffer quad = ByteBuffer.allocateDirect(8 * 4)
@@ -402,6 +433,8 @@ final class GlassScene {
         time = GLES20.glGetUniformLocation(program, "uTime");
         lightUniform = GLES20.glGetUniformLocation(program, "uLight");
         palette = GLES20.glGetUniformLocation(program, "uPal");
+        glassColor = GLES20.glGetUniformLocation(program, "uGlass");
+        glassTint = GLES20.glGetUniformLocation(program, "uTint");
         view = GLES20.glGetUniformLocation(program, "uView");
         quad.put(new float[] {-1, -1, 1, -1, -1, 1, 1, 1}).position(0);
         int[] id = new int[1];
@@ -451,6 +484,8 @@ final class GlassScene {
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lightTexture);
         GLES20.glUniform1i(lightUniform, 0);
         GLES20.glUniform3fv(palette, 4, pal, 0);
+        GLES20.glUniform3fv(glassColor, 2, pal, 12);
+        GLES20.glUniform2f(glassTint, pal[18], pal[19]);
         GLES20.glEnableVertexAttribArray(position);
         GLES20.glVertexAttribPointer(position, 2, GLES20.GL_FLOAT, false, 0, quad);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
@@ -459,55 +494,103 @@ final class GlassScene {
 
     /** Палитра из настроек: готовая или свои цвета. */
     static float[] palette(Prefs cfg) {
-        return palette(cfg.glassPalette, cfg.glassGlowHue, cfg.glassHaloHue,
-                cfg.glassSaturation, cfg.glassBrightness);
+        return palette(cfg.glassPalette, cfg.glassColors, cfg.glassTintTop, cfg.glassTintBottom,
+                cfg.glassBrightness);
     }
 
-    /** Палитра index (PALETTE_*); для PALETTE_CUSTOM — из своих оттенков (см. custom). */
-    static float[] palette(int index, int glowHue, int haloHue, int saturation, int brightness) {
-        if (index == PALETTE_CUSTOM) return custom(glowHue, haloHue, saturation, brightness);
-        return PALETTES[Math.max(0, Math.min(PALETTES.length - 1, index))].clone();
-    }
-
-    /**
-     * Свои цвета: оттенок свечения и ореола (градусы), насыщенность и яркость (%). Фон и
-     * подсветка углов — тёмные тона свечения. Насыщенность каждого цвета и яркость цветов
-     * относительно друг друга — как у «Янтаря» (при оттенках по умолчанию получается он), а
-     * светлота выровнена: синее свечение не выходит темнее жёлтого.
-     */
-    static float[] custom(int glowHue, int haloHue, int saturation, int brightness) {
-        float s = saturation / 100f;
-        float b = brightness / 100f;
-        float[] pal = new float[12];
-        customColor(pal, 0, glowHue + 6, 0.965f * s, 0.504f, b);
-        customColor(pal, 3, glowHue, 0.915f * s, 0.480f, b);
-        customColor(pal, 6, haloHue, 0.83f * s, 0.626f, b);
-        customColor(pal, 9, glowHue, 0.985f * s, 0.443f, b);
+    /** Палитра index (PALETTE_*); для PALETTE_CUSTOM — из своих цветов (см. custom). */
+    static float[] palette(int index, int[] colors, int tintTop, int tintBottom, int brightness) {
+        if (index == PALETTE_CUSTOM) return custom(colors, tintTop, tintBottom, brightness);
+        float[] preset = PALETTES[Math.max(0, Math.min(PALETTES.length - 1, index))];
+        float[] pal = new float[PALETTE_SIZE];
+        System.arraycopy(preset, 0, pal, 0, 12);
+        // Стёкла — цвета свечения, прозрачные.
+        System.arraycopy(preset, 3, pal, 12, 3);
+        System.arraycopy(preset, 3, pal, 15, 3);
         return pal;
     }
 
-    /** Цвет оттенка hue с насыщенностью sat, по светлоте подогнанный к luma «Янтаря». */
-    private static void customColor(float[] pal, int offset, float hue, float sat, float luma,
-            float brightness) {
+    /**
+     * Свои цвета: colors — по одному на часть сцены (COLOR_*), тонировка стёкол и общая
+     * яркость — в процентах. Оттенок и насыщенность берутся как есть, а светлота каждого
+     * цвета подогнана к «Янтарю» и умножена на его яркость (V) — тёмный цвет светит слабее.
+     */
+    static float[] custom(int[] colors, int tintTop, int tintBottom, int brightness) {
+        float[] pal = new float[PALETTE_SIZE];
+        float[] hsv = new float[3];
+        for (int i = 0; i < COLOR_COUNT; i++) {
+            toHsv(colors[i], hsv);
+            float[] rgb = hsvToRgb(hsv[0], hsv[1]);
+            float k = hsv[2] * brightness / 100f * (float) Math.sqrt(COLOR_LUMA[i]
+                    / (0.3f * rgb[0] + 0.59f * rgb[1] + 0.11f * rgb[2]));
+            for (int c = 0; c < 3; c++) pal[3 * i + c] = rgb[c] * k;
+        }
+        pal[18] = tintTop / 100f;
+        pal[19] = tintBottom / 100f;
+        return pal;
+    }
+
+    /**
+     * Свои цвета по прежним настройкам (оттенок свечения и ореола, насыщенность): фон и
+     * подсветка углов — тёмные тона свечения, стёкла — как свечение. По умолчанию — «Янтарь».
+     */
+    static int[] defaultColors(int glowHue, int haloHue, int saturation) {
+        float s = saturation / 100f;
+        int[] colors = new int[COLOR_COUNT];
+        colors[COLOR_BACKGROUND] = hsvColor(glowHue + 6, 0.965f * s, 1f);
+        colors[COLOR_GLOW] = hsvColor(glowHue, 0.915f * s, 1f);
+        colors[COLOR_LIGHT] = hsvColor(haloHue, 0.83f * s, 1f);
+        colors[COLOR_CORNERS] = hsvColor(glowHue, 0.985f * s, 1f);
+        colors[COLOR_GLASS_TOP] = colors[COLOR_GLOW];
+        colors[COLOR_GLASS_BOTTOM] = colors[COLOR_GLOW];
+        return colors;
+    }
+
+    /** Цвет ARGB по оттенку (градусы), насыщенности и яркости 0..1. */
+    static int hsvColor(float hue, float saturation, float value) {
+        float[] rgb = hsvToRgb(hue, saturation);
+        int r = Math.round(255f * value * rgb[0]);
+        int g = Math.round(255f * value * rgb[1]);
+        int b = Math.round(255f * value * rgb[2]);
+        return 0xff000000 | (r << 16) | (g << 8) | b;
+    }
+
+    /** Оттенок (градусы), насыщенность и яркость 0..1 цвета ARGB. */
+    static void toHsv(int color, float[] hsv) {
+        float r = ((color >> 16) & 0xff) / 255f;
+        float g = ((color >> 8) & 0xff) / 255f;
+        float b = (color & 0xff) / 255f;
+        float max = Math.max(r, Math.max(g, b));
+        float min = Math.min(r, Math.min(g, b));
+        float d = max - min;
+        float h = 0f;
+        if (d > 0f) {
+            if (max == r) h = (g - b) / d;
+            else if (max == g) h = 2f + (b - r) / d;
+            else h = 4f + (r - g) / d;
+            h = (h * 60f + 360f) % 360f;
+        }
+        hsv[0] = h;
+        hsv[1] = max > 0f ? d / max : 0f;
+        hsv[2] = max;
+    }
+
+    /** Цвет полной яркости (наибольший канал — 1) по оттенку и насыщенности. */
+    private static float[] hsvToRgb(float hue, float sat) {
         float h = ((hue % 360f) + 360f) % 360f / 60f;
         int sector = Math.min(5, (int) h);
         float f = h - sector;
         float lo = 1f - sat;
         float down = 1f - sat * f;
         float up = 1f - sat * (1f - f);
-        float r, g, bl;
         switch (sector) {
-            case 0: r = 1f; g = up; bl = lo; break;
-            case 1: r = down; g = 1f; bl = lo; break;
-            case 2: r = lo; g = 1f; bl = up; break;
-            case 3: r = lo; g = down; bl = 1f; break;
-            case 4: r = up; g = lo; bl = 1f; break;
-            default: r = 1f; g = lo; bl = down; break;
+            case 0: return new float[] {1f, up, lo};
+            case 1: return new float[] {down, 1f, lo};
+            case 2: return new float[] {lo, 1f, up};
+            case 3: return new float[] {lo, down, 1f};
+            case 4: return new float[] {up, lo, 1f};
+            default: return new float[] {1f, lo, down};
         }
-        float k = brightness * (float) Math.sqrt(luma / (0.3f * r + 0.59f * g + 0.11f * bl));
-        pal[offset] = r * k;
-        pal[offset + 1] = g * k;
-        pal[offset + 2] = bl * k;
     }
 
     /** Основные цвета палитры для системы (часы, палитра One UI): ореол, свечение, фон. */

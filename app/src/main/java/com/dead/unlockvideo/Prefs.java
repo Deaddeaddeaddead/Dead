@@ -37,11 +37,19 @@ final class Prefs {
     // Источник: видео или сцена «Стекло»
     static final String KEY_SOURCE = "source";
     static final String KEY_GLASS_PALETTE = "glass_palette";
-    // Свои цвета стекла: оттенки (градусы), насыщенность и яркость (%)
+    /** Свои цвета стекла (ARGB) по частям сцены — GlassScene.COLOR_*. */
+    static final String[] KEY_GLASS_COLORS = {
+            "glass_color_background", "glass_color_glow", "glass_color_light",
+            "glass_color_corners", "glass_color_glass_top", "glass_color_glass_bottom",
+    };
+    /** Тонировка стёкол, %. */
+    static final String KEY_GLASS_TINT_TOP = "glass_tint_top";
+    static final String KEY_GLASS_TINT_BOTTOM = "glass_tint_bottom";
+    static final String KEY_GLASS_BRIGHTNESS = "glass_brightness";
+    /** Устаревшие (оттенки и насыщенность); читаются только для переноса в свои цвета. */
     static final String KEY_GLASS_GLOW_HUE = "glass_glow_hue";
     static final String KEY_GLASS_HALO_HUE = "glass_halo_hue";
     static final String KEY_GLASS_SATURATION = "glass_saturation";
-    static final String KEY_GLASS_BRIGHTNESS = "glass_brightness";
     static final int MIN_GLASS_BRIGHTNESS = 50;
     static final int MAX_GLASS_BRIGHTNESS = 150;
     static final String KEY_GLASS_DURATION = "glass_duration";
@@ -120,10 +128,12 @@ final class Prefs {
     final int source;
     /** Палитра стекла: GlassScene.PALETTE_*. */
     final int glassPalette;
-    /** Свои цвета стекла (GlassScene.PALETTE_CUSTOM): оттенки 0..359, насыщенность, яркость. */
-    final int glassGlowHue;
-    final int glassHaloHue;
-    final int glassSaturation;
+    /** Свои цвета стекла (GlassScene.PALETTE_CUSTOM): ARGB по GlassScene.COLOR_*. */
+    final int[] glassColors;
+    /** Тонировка верхнего и нижнего стекла, %. */
+    final int glassTintTop;
+    final int glassTintBottom;
+    /** Общая яркость своих цветов, %. */
     final int glassBrightness;
     /** Длительность анимации стекла, мс. */
     final int glassDurationMs;
@@ -159,11 +169,17 @@ final class Prefs {
         source = sp.getInt(KEY_SOURCE, SOURCE_VIDEO) == SOURCE_GLASS ? SOURCE_GLASS : SOURCE_VIDEO;
         glassPalette = Math.max(GlassScene.PALETTE_AMBER, Math.min(GlassScene.PALETTE_CUSTOM,
                 sp.getInt(KEY_GLASS_PALETTE, GlassScene.PALETTE_AMBER)));
-        glassGlowHue = Math.floorMod(
-                sp.getInt(KEY_GLASS_GLOW_HUE, GlassScene.DEFAULT_GLOW_HUE), 360);
-        glassHaloHue = Math.floorMod(
-                sp.getInt(KEY_GLASS_HALO_HUE, GlassScene.DEFAULT_HALO_HUE), 360);
-        glassSaturation = Math.max(0, Math.min(100, sp.getInt(KEY_GLASS_SATURATION, 100)));
+        // Не заданные цвета — из прежних настроек оттенков (по умолчанию — «Янтарь»).
+        int[] fallback = GlassScene.defaultColors(
+                Math.floorMod(sp.getInt(KEY_GLASS_GLOW_HUE, GlassScene.DEFAULT_GLOW_HUE), 360),
+                Math.floorMod(sp.getInt(KEY_GLASS_HALO_HUE, GlassScene.DEFAULT_HALO_HUE), 360),
+                Math.max(0, Math.min(100, sp.getInt(KEY_GLASS_SATURATION, 100))));
+        glassColors = new int[GlassScene.COLOR_COUNT];
+        for (int i = 0; i < glassColors.length; i++) {
+            glassColors[i] = 0xff000000 | sp.getInt(KEY_GLASS_COLORS[i], fallback[i]);
+        }
+        glassTintTop = Math.max(0, Math.min(100, sp.getInt(KEY_GLASS_TINT_TOP, 0)));
+        glassTintBottom = Math.max(0, Math.min(100, sp.getInt(KEY_GLASS_TINT_BOTTOM, 0)));
         glassBrightness = Math.max(MIN_GLASS_BRIGHTNESS, Math.min(MAX_GLASS_BRIGHTNESS,
                 sp.getInt(KEY_GLASS_BRIGHTNESS, 100)));
         glassDurationMs = 100 * Math.max(MIN_GLASS_DURATION, Math.min(MAX_GLASS_DURATION,
