@@ -41,12 +41,6 @@
                 android:resource="@xml/wallpaper" />
         </service>
 
-        <!-- Миниатюра обоев для системы (Android 16); читать могут только системные приложения. -->
-        <provider
-            android:name=".StillProvider"
-            android:authorities="com.dead.unlockvideo.still"
-            android:exported="true" />
-
         <service
             android:name=".RecentsDetectorService"
             android:exported="true"

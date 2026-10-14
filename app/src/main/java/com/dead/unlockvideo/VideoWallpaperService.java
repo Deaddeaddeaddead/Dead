@@ -3,7 +3,6 @@ package com.dead.unlockvideo;
 import android.app.KeyguardManager;
 import android.app.WallpaperColors;
 import android.app.WallpaperManager;
-import android.app.wallpaper.WallpaperDescription;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -16,7 +15,6 @@ import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
-import android.net.Uri;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
@@ -73,15 +71,6 @@ public class VideoWallpaperService extends WallpaperService {
 
     @Override
     public Engine onCreateEngine() {
-        return new VideoEngine();
-    }
-
-    /** Android 16: система передаёт сохранённое описание обоев — отмечаем в журнале. */
-    @Override
-    public Engine onCreateEngine(WallpaperDescription description) {
-        EventLog.add(this, "обои создаются по описанию системы"
-                + (description != null && description.getThumbnail() != null
-                ? ", миниатюра " + description.getThumbnail() : ""));
         return new VideoEngine();
     }
 
@@ -790,21 +779,6 @@ public class VideoWallpaperService extends WallpaperService {
         @Override
         public WallpaperColors onComputeColors() {
             return colors;
-        }
-
-        /**
-         * Android 16: обои из превью сохраняются — отдаём системе описание с миниатюрой
-         * (кадр покоя). Её могут показать экраны, где система рисует обои картинкой.
-         */
-        @Override
-        public WallpaperDescription onApplyWallpaper(int which) {
-            Context context = VideoWallpaperService.this;
-            Uri thumbnail = StillProvider.uri(context);
-            log("система сохраняет обои (флаги " + which + ") — передаём миниатюру");
-            return new WallpaperDescription.Builder()
-                    .setThumbnail(thumbnail)
-                    .setTitle(getString(R.string.wallpaper_name))
-                    .build();
         }
 
         private void loadConfig() {
