@@ -434,6 +434,8 @@ public class VideoWallpaperService extends WallpaperService {
                 text.append(" ").append(extras.keySet());
             }
             log(text.toString());
+            // Samsung сообщает о засыпании раньше системного события — начинаем переход к AOD.
+            if ("android.wallpaper.goingtosleep".equals(action)) goingOff("команда засыпания");
             return null;
         }
 
@@ -497,6 +499,7 @@ public class VideoWallpaperService extends WallpaperService {
             sampleOnWake = true;
             handler.removeCallbacks(unlockWatch);
             hiddenByApp = false;
+            pendingHome = false; // ожидание рабочего стола не переживает сон
             armed = isPreview();
             // Обои видны и на AOD, поэтому переходим плавно: масштаб — к выбранному
             // для AOD, параллакс — в центр. Гироскоп выключаем (батарея).
@@ -784,6 +787,26 @@ public class VideoWallpaperService extends WallpaperService {
             deviceLockedAtWake = keyguard.isDeviceLocked();
             log("пробуждение: экран_блокировки=" + keyguard.isKeyguardLocked()
                     + " нужна_проверка=" + deviceLockedAtWake);
+            if (!isPreview() && !keyguard.isKeyguardLocked()) wakeWithoutLock();
+        }
+
+        /**
+         * Экран включился без экрана блокировки (телефон не успел заблокироваться): реверса
+         * нет, перезапуска с начала нет. Если видео не в конце — плавно вперёд с этого кадра.
+         */
+        private void wakeWithoutLock() {
+            log("пробуждение без экрана блокировки — реверса нет");
+            needReverse = false;
+            rewindOnScreenOn = false;
+            unlocked = true;
+            keyguardGone = true;
+            handler.removeCallbacks(unlockWatch);
+            animateUnlockZoom(homeScale(), cfg.zoomDurationMs);
+            if (cfg.startOnUnlock && forwardReady
+                    && forwardPosition() < forwardEndMs() - END_EPSILON_MS) {
+                log("запуск: вперёд с текущего кадра");
+                triggerForward(false);
+            }
         }
 
         private void watchUnlock() {
