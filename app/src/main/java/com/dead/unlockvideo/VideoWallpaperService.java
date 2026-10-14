@@ -344,6 +344,8 @@ public class VideoWallpaperService extends WallpaperService {
             sp = Prefs.prefs(context);
             sp.registerOnSharedPreferenceChangeListener(this);
             LauncherState.addListener(this);
+            // Таблица света стекла — 128 КБ из assets, один раз на процесс.
+            GlassScene.load(context);
 
             IntentFilter filter = new IntentFilter();
             filter.addAction(Intent.ACTION_SCREEN_OFF);

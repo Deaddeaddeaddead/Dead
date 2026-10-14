@@ -122,6 +122,7 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         sp = Prefs.prefs(this);
+        GlassScene.load(this);
         //noinspection ResultOfMethodCallIgnored
         Prefs.legacyReverseFile(this).delete();
         Prefs cfg = Prefs.load(this);

@@ -1,8 +1,11 @@
 package com.dead.unlockvideo;
 
+import android.content.Context;
 import android.opengl.GLES20;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
@@ -10,9 +13,10 @@ import java.nio.FloatBuffer;
 /**
  * Режим «Стекло»: светящаяся капсула и две стеклянные, которые съезжаются к ней. Рисуется
  * шейдером целиком — без видео, в разрешении экрана. Только на потоке рендера.
- * Свет плавно качается и усиливается, пока капсулы движутся; стекло дымчатое, с кантом.
- * Линза у кромки, блик и внутренняя тень — по мотивам Kyant0/AndroidLiquidGlass,
- * Copyright 2025 Kyant, Apache License 2.0.
+ * Геометрия, ход капсул и свет сняты с исходного ролика: ореол и свечение капсулы по её
+ * контуру, то, как они видны сквозь стекло, и канты стёкол лежат таблицей в
+ * assets/glass_light.bin (по времени ролика); шейдер собирает из неё картинку с гладкими
+ * переходами и чёткими кромками в любом разрешении и перекрашивает в палитру.
  */
 final class GlassScene {
     /** Сцена построена на кадре этого размера и обрезается под экран так же, как видео. */
@@ -31,6 +35,22 @@ final class GlassScene {
             {0.12f, 0.7f, 0.4f, 0.1f, 1.0f, 0.42f, 0.55f, 1.0f, 0.6f, 0.08f, 0.7f, 0.3f},
     };
 
+    /** Таблица света: 64 × 512 RGBA. */
+    private static final String LIGHT_ASSET = "glass_light.bin";
+    private static final int LIGHT_WIDTH = 64;
+    private static final int LIGHT_HEIGHT = 512;
+    private static volatile byte[] light;
+
+    /**
+     * Положение капсул по времени ролика: 25 точек на равных долях времени. Ролик начинается
+     * уже в движении и плавно останавливается к 0,87 — так же и здесь.
+     */
+    private static final float[] MOTION = {
+            0.0000f, 0.0569f, 0.1140f, 0.1756f, 0.2354f, 0.2955f, 0.3577f, 0.4199f, 0.4813f,
+            0.5408f, 0.5988f, 0.6546f, 0.7089f, 0.7620f, 0.8085f, 0.8499f, 0.8877f, 0.9213f,
+            0.9510f, 0.9724f, 0.9874f, 1.0000f, 1.0000f, 1.0000f, 1.0000f,
+    };
+
     private static final String VERTEX_SHADER =
             "attribute vec2 aPosition;\n"
             + "void main() {\n"
@@ -40,37 +60,98 @@ final class GlassScene {
             "precision highp float;\n"
             + "uniform vec2 uRes;\n"
             + "uniform vec4 uCrop;\n"
+            + "// Положение стеклянных капсул (0..1).\n"
             + "uniform float uProgress;\n"
-            + "uniform float uGlow;\n"
-            + "uniform vec2 uTilt;\n"
-            + "// 0 — фон, 1 — свечение внутри стекла (угли), 2 — ореол, 3 — подсветка углов фона\n"
+            + "// Время ролика (0..1) — строка таблицы света.\n"
+            + "uniform float uTime;\n"
+            + "// Свет оригинала, снятый с видео, 64×512 (значения — квадрат × 12), блоки по 32 строки\n"
+            + "// (время): 0, 1 — ореол светящейся капсулы в 8 узлах расстояния по её контуру; 2, 3 —\n"
+            + "// свечение внутри неё в 8 узлах глубины; 4 — глубинное свечение вдоль оси (R — линия у\n"
+            + "// верхнего левого края, G — ось, B — у нижнего правого); 5 — кант стёкол по их контуру\n"
+            + "// (R — верхнее, G — нижнее); 6, 7 и 8, 9 — ореол и свечение, видимые сквозь стекло\n"
+            + "// (от видимого края: стекло сдвигает его внутрь, см. edgeShift).\n"
+            + "uniform sampler2D uLight;\n"
+            + "// 0 — фон, 1 — свечение внутри (угли), 2 — ореол, 3 — подсветка углов фона\n"
             + "uniform vec3 uPal[4];\n"
             + "\n"
             + "const float ASPECT = 2.175;\n"
-            + "const vec2 AXIS = vec2(0.6697, 0.7428);\n"
-            + "const vec2 UL = vec2(-0.7428, 0.6697);\n"
-            + "// Свет: снизу в покое; пока капсулы движутся, плавно качается вправо-вверх и обратно\n"
-            + "// и мягко усиливается (gSwing: 0 в покое, 1 в середине движения).\n"
-            + "vec2 gLight;\n"
-            + "float gSwing;\n"
+            + "const float PI = 3.14159265;\n"
+            + "// Геометрия снята с видео: общая ось, светящаяся капсула, стёкла (шире и короче её).\n"
+            + "const vec2 AXIS = vec2(0.6451, 0.7641);\n"
+            + "const vec2 UL = vec2(-0.7641, 0.6451);\n"
             + "const float HALF_LEN = 0.381;\n"
             + "const float RADIUS = 0.222;\n"
+            + "const vec2 MID = vec2(0.0026, 0.0056);\n"
+            + "const float GLASS_HALF_LEN = 0.377;\n"
+            + "const float GLASS_RADIUS = 0.227;\n"
             + "const float TRAVEL = 0.385;\n"
-            + "const vec2 MID = vec2(0.0007, 0.0073);\n"
-            + "const vec2 TOP_END = vec2(0.0081, 0.5083);\n"
-            + "const vec2 BOTTOM_END = vec2(-0.0062, -0.5008);\n"
-            + "const float LENS_HEIGHT = 0.1;\n"
-            + "const float LENS_AMOUNT = 0.12;\n"
-            + "const float LENS_GAIN = 1.5;\n"
-            + "const float SMOKE = 0.35;\n"
+            + "const vec2 TOP_END = vec2(-0.0005, 0.5161);\n"
+            + "const vec2 BOTTOM_END = vec2(0.0023, -0.5085);\n"
+            + "// Сквозь стекло фон чуть темнее, глубина светящейся капсулы — ярче.\n"
+            + "const float BG_GAIN = 0.85;\n"
+            + "const float DEEP_GAIN = 1.4;\n"
             + "\n"
-            + "float capsule(vec2 p, vec2 c, out vec2 n) {\n"
+            + "float capsule(vec2 p, vec2 c, float halfLen, float radius, out vec2 n) {\n"
             + "  vec2 d = p - c;\n"
-            + "  float h = clamp(dot(d, AXIS), -HALF_LEN, HALF_LEN);\n"
+            + "  float h = clamp(dot(d, AXIS), -halfLen, halfLen);\n"
             + "  vec2 q = d - AXIS * h;\n"
             + "  float len = length(q);\n"
             + "  n = len > 1e-5 ? q / len : UL;\n"
-            + "  return len - RADIUS;\n"
+            + "  return len - radius;\n"
+            + "}\n"
+            + "\n"
+            + "// Точка контура (0..1) для точки (x вдоль оси, y поперёк от центра капсулы): от нижнего края\n"
+            + "// верхнего правого торца против часовой — торец, верхний левый край, нижний левый торец,\n"
+            + "// нижний правый край.\n"
+            + "float perim(float x, float y, float halfLen, float radius) {\n"
+            + "  float t;\n"
+            + "  if (x > halfLen) {\n"
+            + "    t = (atan(y, x - halfLen) + 0.5 * PI) * radius;\n"
+            + "  } else if (x < -halfLen) {\n"
+            + "    float ph = atan(y, x + halfLen);\n"
+            + "    if (ph < 0.0) ph += 2.0 * PI;\n"
+            + "    t = PI * radius + 2.0 * halfLen + (ph - 0.5 * PI) * radius;\n"
+            + "  } else if (y >= 0.0) {\n"
+            + "    t = PI * radius + (halfLen - x);\n"
+            + "  } else {\n"
+            + "    t = 2.0 * PI * radius + 2.0 * halfLen + (x + halfLen);\n"
+            + "  }\n"
+            + "  return t / (4.0 * halfLen + 2.0 * PI * radius);\n"
+            + "}\n"
+            + "\n"
+            + "vec4 light(float u, float block) {\n"
+            + "  vec4 v = texture2D(uLight, vec2(u, (block * 32.0 + uTime * 31.0 + 0.5) / 512.0));\n"
+            + "  return v * v * 12.0;\n"
+            + "}\n"
+            + "\n"
+            + "// Узлы расстояния от края: 0.0015 + 0.004 k + 0.0025 k², k = 0..7.\n"
+            + "float knot(float d) {\n"
+            + "  return (sqrt(0.000016 + 0.01 * max(d - 0.0015, 0.0)) - 0.004) / 0.005;\n"
+            + "}\n"
+            + "\n"
+            + "float bspline(float t) {\n"
+            + "  t = abs(t);\n"
+            + "  if (t < 1.0) return (4.0 - 6.0 * t * t + 3.0 * t * t * t) / 6.0;\n"
+            + "  if (t < 2.0) return (2.0 - t) * (2.0 - t) * (2.0 - t) / 6.0;\n"
+            + "  return 0.0;\n"
+            + "}\n"
+            + "\n"
+            + "// Профиль по 8 узлам в точке контура s — кубический B-сплайн: гладко, без колец и изломов.\n"
+            + "float profile(float s, float block, float d) {\n"
+            + "  float k = min(knot(d), 7.0);\n"
+            + "  vec4 w0 = vec4(bspline(k), bspline(k - 1.0), bspline(k - 2.0), bspline(k - 3.0));\n"
+            + "  vec4 w1 = vec4(bspline(k - 4.0), bspline(k - 5.0), bspline(k - 6.0), bspline(k - 7.0));\n"
+            + "  float v = dot(w0, light(s, block)) + dot(w1, light(s, block + 1.0));\n"
+            + "  return v / (dot(w0, vec4(1.0)) + dot(w1, vec4(1.0)));\n"
+            + "}\n"
+            + "\n"
+            + "// Глубинное свечение: вдоль оси — по таблице, поперёк — плавно между тремя линиями\n"
+            + "// (y = 0.07, 0, -0.07), без выбросов за их значения.\n"
+            + "float deepLight(float x, float y) {\n"
+            + "  float g = clamp((x / (HALF_LEN + RADIUS) * 0.5 + 0.5) * 64.0, 0.5, 63.5);\n"
+            + "  vec3 v = light(g / 64.0, 4.0).rgb;\n"
+            + "  float t = y / 0.07;\n"
+            + "  return t > 0.0 ? mix(v.g, v.r, smoothstep(0.0, 1.0, t)) : mix(v.g, v.b, smoothstep(0.0, 1.0, -t));\n"
             + "}\n"
             + "\n"
             + "vec3 background(vec2 p) {\n"
@@ -78,45 +159,44 @@ final class GlassScene {
             + "  return uPal[0] * 0.11 + uPal[3] * 0.3 * corner;\n"
             + "}\n"
             + "\n"
-            + "// Задний слой: фон, ореол вокруг светящейся капсулы и она сама. haloGain и emberGain —\n"
-            + "// как стекло перед ними меняет ореол и свечение.\n"
-            + "// soft — вид сквозь стекло: у края капсулы вместо тёмной обводки и зазора яркая кайма.\n"
-            + "vec3 back(vec2 p, float pxw, float soft, float outGain, float emberGain) {\n"
+            + "// Насколько стекло сдвигает видимый край светящейся капсулы внутрь: тем сильнее, чем\n"
+            + "// ближе к кромке стекла (снято с видео).\n"
+            + "float edgeShift(float depth) {\n"
+            + "  return clamp(0.0304 - 0.1213 * depth, 0.0158, 0.026);\n"
+            + "}\n"
+            + "\n"
+            + "// Задний слой: фон, ореол вокруг светящейся капсулы и она сама — со светом оригинала;\n"
+            + "// сквозь стекло (glass = 1) — свет, каким он виден через стекло в оригинале, а край\n"
+            + "// капсулы сдвинут внутрь на shrink.\n"
+            + "vec3 back(vec2 p, float pxw, float glass, float shrink) {\n"
             + "  vec2 n;\n"
-            + "  float d = capsule(p, MID, n);\n"
-            + "  float glow = 0.9 + 0.45 * gSwing;\n"
-            + "  // Освещённость стороны — по направлению от центра капсулы: меняется плавно по кругу.\n"
-            + "  vec2 radial = normalize(p - MID + vec2(1e-5));\n"
-            + "  float lit = smoothstep(-0.9, 0.9, dot(radial, gLight));\n"
-            + "  float blur = pxw;\n"
+            + "  float d = capsule(p, MID, HALF_LEN, RADIUS, n) + shrink;\n"
+            + "  vec2 rel = p - MID;\n"
+            + "  float x = dot(rel, AXIS);\n"
+            + "  float y = dot(rel, UL);\n"
+            + "  float s = perim(x, y, HALF_LEN, RADIUS);\n"
             + "  vec3 outside = vec3(0.0);\n"
             + "  vec3 inside = vec3(0.0);\n"
-            + "  if (d > -blur) {\n"
+            + "  if (d > -pxw) {\n"
             + "    float od = max(d, 0.0);\n"
-            + "    // Освещённая сторона — ярче и шире, теневая — уже; за верхним торцом в покое темно.\n"
-            + "    float amp = mix(1.4, 3.4, lit) * (1.0 - 0.8 * (1.0 - gSwing) * smoothstep(0.55, 0.95, dot(radial, AXIS)));\n"
-            + "    float width = mix(0.04, 0.095, lit);\n"
-            + "    // Тонкая тёмная линия у края (как в видео), сквозь стекло её нет.\n"
-            + "    float gap = mix(mix(0.35, 1.0, smoothstep(0.0, 0.005, od)), 1.0, soft);\n"
-            + "    outside = (background(p) + uPal[2] * glow * amp * exp(-od / width) * gap) * outGain;\n"
+            + "    float halo = profile(s, glass * 6.0, od) * exp(-max(od - 0.152, 0.0) / 0.08);\n"
+            + "    // Сквозь стекло снаружи видимого края — тонкая тёмная линия.\n"
+            + "    float t = (od - 0.0015) / 0.0013;\n"
+            + "    halo *= 1.0 - 0.5 * glass * exp(-t * t);\n"
+            + "    outside = background(p) * mix(1.0, BG_GAIN, glass) + uPal[2] * halo;\n"
             + "  }\n"
-            + "  if (d < blur) {\n"
-            + "    // Светящаяся капсула — как световод: свет входит с торцов и бежит вдоль краёв. Вдоль\n"
-            + "    // верхнего левого края он сильнее у нижнего торца, вдоль нижнего правого — у верхнего.\n"
-            + "    float s = max(-d, 0.0);\n"
-            + "    vec2 rel = p - MID;\n"
-            + "    float a = dot(rel, AXIS) / (HALF_LEN + RADIUS);\n"
-            + "    float u = dot(rel, UL) / RADIUS;\n"
-            + "    float sideUL = 5.0 * smoothstep(0.3, -0.5, a);\n"
-            + "    float sideLR = 5.0 * smoothstep(-0.3, 0.5, a);\n"
-            + "    float edge = (0.6 + mix(sideLR, sideUL, smoothstep(-0.3, 0.3, u))) * (0.7 + 0.6 * lit);\n"
-            + "    float tip = HALF_LEN + RADIUS - abs(dot(rel, AXIS));\n"
-            + "    float ember = 0.27 + glow * (edge * exp(-s / 0.065) + 3.5 * exp(-max(tip, 0.0) / 0.085));\n"
-            + "    // Внутри — один оттенок свечения; желтеет только самое яркое (насыщение).\n"
-            + "    inside = uPal[1] * ember * emberGain * (1.0 - 0.35 * (1.0 - soft) * exp(-s / (pxw * 1.5)));\n"
-            + "    inside += uPal[2] * glow * 2.2 * soft * exp(-s / 0.012);\n"
+            + "  if (d < pxw) {\n"
+            + "    float dep = max(-d, 0.0);\n"
+            + "    float deep = deepLight(x, y) * mix(1.0, DEEP_GAIN, glass);\n"
+            + "    // Сквозь стекло таблица заходит глубже: в глубину — только за её пределами.\n"
+            + "    float glow = mix(profile(s, 2.0 + glass * 6.0, dep), deep,\n"
+            + "        smoothstep(mix(0.07, 0.13, glass), mix(0.14, 0.16, glass), dep));\n"
+            + "    // Сквозь стекло у видимого края — тонкая яркая линия.\n"
+            + "    float t = (dep - 0.0015) / 0.0015;\n"
+            + "    glow *= 1.0 + 0.6 * glass * exp(-t * t);\n"
+            + "    inside = uPal[1] * glow;\n"
             + "  }\n"
-            + "  return mix(outside, inside, smoothstep(blur, -blur, d));\n"
+            + "  return mix(outside, inside, smoothstep(pxw, -pxw, d));\n"
             + "}\n"
             + "\n"
             + "void main() {\n"
@@ -124,57 +204,29 @@ final class GlassScene {
             + "  vec2 f = uCrop.zw + uv * uCrop.xy;\n"
             + "  vec2 p = (f - 0.5) * vec2(1.0, ASPECT);\n"
             + "  float pxw = uCrop.x / uRes.x;\n"
-            + "  gSwing = sin(3.14159 * uProgress);\n"
-            + "  float angle = radians(-76.0 + 110.0 * gSwing);\n"
-            + "  gLight = vec2(cos(angle), sin(angle));\n"
             + "  float k = 1.0 - uProgress;\n"
             + "  vec2 top = TOP_END + AXIS * TRAVEL * k;\n"
             + "  vec2 bot = BOTTOM_END - AXIS * TRAVEL * k;\n"
-            + "  vec2 n1;\n"
-            + "  vec2 n2;\n"
-            + "  float d1 = capsule(p, top, n1);\n"
-            + "  float d2 = capsule(p, bot, n2);\n"
-            + "  float d = d1;\n"
-            + "  vec2 n = n1;\n"
-            + "  if (d2 < d1) { d = d2; n = n2; }\n"
-            + "  float od = max(d, 0.0);\n"
-            + "  // Тёмная тонкая обводка снаружи стекла и мягкая тень.\n"
-            + "  vec3 c = back(p, pxw, 0.0, 1.0, 1.0) * (1.0 - 0.75 * exp(-od / (pxw * 1.5)) - 0.12 * exp(-od / 0.02));\n"
+            + "  vec2 n;\n"
+            + "  float d1 = capsule(p, top, GLASS_HALF_LEN, GLASS_RADIUS, n);\n"
+            + "  float d2 = capsule(p, bot, GLASS_HALF_LEN, GLASS_RADIUS, n);\n"
+            + "  bool isTop = d1 < d2;\n"
+            + "  float d = isTop ? d1 : d2;\n"
+            + "  vec3 c = vec3(0.0);\n"
+            + "  if (d > -pxw) {\n"
+            + "    // Тонкая тёмная линия снаружи по кромке стекла (заметна там, где за ней светло).\n"
+            + "    float od = max(d, 0.0);\n"
+            + "    c = back(p, pxw, 0.0, 0.0) * (1.0 - 0.5 * exp(-od * od / 0.00000225));\n"
+            + "  }\n"
             + "  if (d < pxw) {\n"
-            + "    // Жидкое стекло по мотивам Kyant0/AndroidLiquidGlass (Apache 2.0): линза в полосе у\n"
-            + "    // кромки (circleMap) с эффектом глубины, блик кромки под 45° и внутренняя тень.\n"
             + "    float s = max(-d, 0.0);\n"
-            + "    vec2 center = d1 < d2 ? top : bot;\n"
-            + "    vec2 dir = normalize(n + normalize(p - center + vec2(1e-5)));\n"
-            + "    float x = clamp(1.0 - s / LENS_HEIGHT, 0.0, 1.0);\n"
-            + "    float shift = (1.0 - sqrt(1.0 - x * x)) * LENS_AMOUNT;\n"
-            + "    vec2 q = p - dir * shift;\n"
-            + "    // Линза собирает свет: светящаяся капсула сквозь стекло ярче, чем без него.\n"
-            + "    // Дымчатое стекло глушит фон и ореол (у кромки, где оно толще, сильнее), а светящуюся\n"
-            + "    // капсулу собирает и делает ярче.\n"
-            + "    float smoke = SMOKE * mix(0.5, 1.0, smoothstep(0.0, 0.07, s));\n"
-            + "    vec3 glass = back(q, pxw, 1.0, smoke, LENS_GAIN) + uPal[0] * 0.025;\n"
-            + "    // Свет светящейся капсулы расходится в толще стекла рядом с ней.\n"
-            + "    vec2 mn;\n"
-            + "    float dm = max(capsule(p, MID, mn), 0.0);\n"
-            + "    glass += uPal[1] * 0.7 * (0.9 + 0.25 * uGlow) * exp(-dm / 0.14) * smoothstep(0.0, 0.05, s);\n"
-            + "    // Внутренняя тень: темнее у верхней кромки.\n"
-            + "    vec2 sn;\n"
-            + "    float ds = capsule(p + vec2(0.0, 0.045), center, sn);\n"
-            + "    glass *= 1.0 - 0.18 * smoothstep(0.0, -0.06, ds) * (1.0 - smoothstep(-0.06, -0.0, d + 0.0));\n"
-            + "    // Блик кромки: тонкая размытая линия, ярче вдоль диагонали 45°.\n"
-            + "    float edgeLine = exp(-s / (pxw * 1.6));\n"
-            + "    float hl = abs(dot(n, vec2(0.7071, -0.7071)));\n"
-            + "    glass += vec3(1.0, 0.96, 0.9) * 0.55 * hl * edgeLine;\n"
-            + "    // Подсвеченный кант: толще блика, ярче со стороны света и там, где за кромкой светло.\n"
-            + "    vec3 env = back(p + n * 0.03, pxw, 0.0, 1.0, 1.0);\n"
-            + "    // Кант: свет, прошедший сквозь стекло от светящейся капсулы, выходит на дальних от неё\n"
-            + "    // краях — там кант толще и ярче; пока свет поворачивается, ярче ещё.\n"
-            + "    // Пока свет качается, по канту бежит блик со стороны света.\n"
-            + "    float away = max(dot(n, normalize(p - MID)), 0.0);\n"
-            + "    float lit = away * away * (0.8 + 0.5 * gSwing) + 0.8 * gSwing * pow(max(dot(n, gLight), 0.0), 3.0);\n"
-            + "    float rim = exp(-s / (pxw * 3.0)) + 0.4 * lit * exp(-s / (pxw * 9.0));\n"
-            + "    glass += mix(uPal[1], uPal[2], 0.4) * rim * (0.4 + 2.2 * lit + 1.2 * dot(env, vec3(0.5, 0.35, 0.15)));\n"
+            + "    vec3 glass = back(p, pxw, 1.0, edgeShift(s));\n"
+            + "    // Кант — яркая тонкая линия у самой кромки и слабый хвост внутрь; форма и яркость по\n"
+            + "    // контуру сняты с видео.\n"
+            + "    vec2 rel = p - (isTop ? top : bot);\n"
+            + "    vec4 r = light(perim(dot(rel, AXIS), dot(rel, UL), GLASS_HALF_LEN, GLASS_RADIUS), 5.0);\n"
+            + "    float rim = 4.22 * (1.0 - exp(-s * s / 0.00000196)) * (exp(-s / 0.001) + 0.2 * exp(-s / 0.01));\n"
+            + "    glass += uPal[1] * (isTop ? r.r : r.g) * rim;\n"
             + "    c = mix(c, glass, smoothstep(pxw, -pxw, d));\n"
             + "  }\n"
             + "  gl_FragColor = vec4(1.0 - exp(-c), 1.0);\n"
@@ -185,58 +237,91 @@ final class GlassScene {
     private final int res;
     private final int crop;
     private final int progress;
-    private final int glow;
-    private final int tilt;
+    private final int time;
+    private final int lightUniform;
     private final int palette;
+    private final int lightTexture;
     private final FloatBuffer quad = ByteBuffer.allocateDirect(8 * 4)
             .order(ByteOrder.nativeOrder()).asFloatBuffer();
 
+    /** Читает таблицу света из assets — один раз на процесс, до первого GlassScene. */
+    static void load(Context context) {
+        if (light != null) return;
+        synchronized (GlassScene.class) {
+            if (light != null) return;
+            try (InputStream in = context.getApplicationContext().getAssets().open(LIGHT_ASSET)) {
+                ByteArrayOutputStream out = new ByteArrayOutputStream(LIGHT_WIDTH * LIGHT_HEIGHT * 4);
+                byte[] buffer = new byte[16384];
+                int read;
+                while ((read = in.read(buffer)) > 0) out.write(buffer, 0, read);
+                byte[] data = out.toByteArray();
+                if (data.length == LIGHT_WIDTH * LIGHT_HEIGHT * 4) light = data;
+            } catch (IOException ignored) {
+                // Без таблицы сцена не создастся и сообщит об ошибке.
+            }
+        }
+    }
+
     GlassScene() throws IOException {
+        byte[] data = light;
+        if (data == null) throw new IOException("нет таблицы света " + LIGHT_ASSET);
         program = GlUtil.program(VERTEX_SHADER, FRAGMENT_SHADER);
         position = GLES20.glGetAttribLocation(program, "aPosition");
         res = GLES20.glGetUniformLocation(program, "uRes");
         crop = GLES20.glGetUniformLocation(program, "uCrop");
         progress = GLES20.glGetUniformLocation(program, "uProgress");
-        glow = GLES20.glGetUniformLocation(program, "uGlow");
-        tilt = GLES20.glGetUniformLocation(program, "uTilt");
+        time = GLES20.glGetUniformLocation(program, "uTime");
+        lightUniform = GLES20.glGetUniformLocation(program, "uLight");
         palette = GLES20.glGetUniformLocation(program, "uPal");
         quad.put(new float[] {-1, -1, 1, -1, -1, 1, 1, 1}).position(0);
+        int[] id = new int[1];
+        GLES20.glGenTextures(1, id, 0);
+        lightTexture = id[0];
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lightTexture);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
+        // По ширине — точки замкнутого контура.
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_REPEAT);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+        ByteBuffer pixels = ByteBuffer.allocateDirect(data.length).order(ByteOrder.nativeOrder());
+        pixels.put(data).position(0);
+        GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1);
+        GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, LIGHT_WIDTH, LIGHT_HEIGHT, 0,
+                GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, pixels);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
+    }
+
+    /** Положение капсул в момент t (доля ролика, 0..1). */
+    static float motion(float t) {
+        if (t <= 0f) return MOTION[0];
+        if (t >= 1f) return MOTION[MOTION.length - 1];
+        float x = t * (MOTION.length - 1);
+        int i = (int) x;
+        return MOTION[i] + (MOTION[i + 1] - MOTION[i]) * (x - i);
     }
 
     /**
-     * Ход анимации t (0..1) в положение капсул — кривая, снятая с исходного видео:
-     * cubic-bezier(0.44, 0, 0.54, 1), без рывка в начале и в конце.
+     * t — момент ролика (0..1). cropBox — видимая часть кадра сцены (как у видео): доля по X
+     * и Y, левый нижний угол.
      */
-    static float ease(float t) {
-        if (t <= 0f) return 0f;
-        if (t >= 1f) return 1f;
-        float lo = 0f;
-        float hi = 1f;
-        float s = t;
-        for (int i = 0; i < 20; i++) {
-            s = (lo + hi) / 2f;
-            float x = 3f * (1f - s) * (1f - s) * s * 0.44f + 3f * (1f - s) * s * s * 0.54f + s * s * s;
-            if (x < t) lo = s; else hi = s;
-        }
-        return 3f * (1f - s) * s * s + s * s * s;
-    }
-
-    /** cropBox — видимая часть кадра сцены (как у видео): доля по X и Y, левый нижний угол. */
     void draw(int width, int height, float[] cropBox, float t, int paletteIndex) {
-        float eased = ease(t);
+        float clamped = Math.max(0f, Math.min(1f, t));
         GLES20.glViewport(0, 0, width, height);
         GLES20.glUseProgram(program);
         GLES20.glUniform2f(res, width, height);
         GLES20.glUniform4f(crop, cropBox[0], cropBox[1], cropBox[2], cropBox[3]);
-        GLES20.glUniform1f(progress, eased);
-        // Свет чуть ярче, пока капсулы движутся.
-        GLES20.glUniform1f(glow, 0.6f * (float) Math.sin(Math.PI * eased));
-        GLES20.glUniform2f(tilt, 0f, 0f);
+        GLES20.glUniform1f(progress, motion(clamped));
+        GLES20.glUniform1f(time, clamped);
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lightTexture);
+        GLES20.glUniform1i(lightUniform, 0);
         float[] pal = PALETTES[Math.max(0, Math.min(PALETTES.length - 1, paletteIndex))];
         GLES20.glUniform3fv(palette, 4, pal, 0);
         GLES20.glEnableVertexAttribArray(position);
         GLES20.glVertexAttribPointer(position, 2, GLES20.GL_FLOAT, false, 0, quad);
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0);
     }
 
     /** Основные цвета палитры для системы (часы, палитра One UI): ореол, свечение, фон. */
