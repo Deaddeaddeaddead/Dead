@@ -55,11 +55,6 @@ final class Prefs {
     static final int MIN_GLASS_BRIGHTNESS = 50;
     static final int MAX_GLASS_BRIGHTNESS = 150;
     static final String KEY_GLASS_DURATION = "glass_duration";
-    /** Плавный старт и плавная остановка анимации сцены, % (Easing). */
-    static final String KEY_EASE_START = "ease_start";
-    static final String KEY_EASE_END = "ease_end";
-    /** Прежняя общая плавность — по ней старт и остановка по умолчанию. */
-    private static final String KEY_SCENE_SOFTNESS = "scene_softness";
     /** Цвет сцен «Ленты» и «Квадраты»: LightColors.PALETTE_*. */
     static final String KEY_LIGHT_PALETTE = "light_palette";
     /** Свои цвета «Лент» и «Квадратов» (ARGB): вместо светло-бирюзового и синего. */
@@ -165,9 +160,6 @@ final class Prefs {
     final int glassBrightness;
     /** Длительность анимации стекла, мс. */
     final int glassDurationMs;
-    /** Плавный старт и плавная остановка анимации сцены, 0..100 %. */
-    final int easeStart;
-    final int easeEnd;
     /** «Ленты» и «Квадраты»: цвет (LightColors.PALETTE_*), свои цвета, их яркость, %. */
     final int lightPalette;
     final int[] lightColors;
@@ -232,9 +224,6 @@ final class Prefs {
                 sp.getInt(KEY_GLASS_BRIGHTNESS, 100)));
         glassDurationMs = 100 * Math.max(MIN_GLASS_DURATION, Math.min(MAX_GLASS_DURATION,
                 sp.getInt(KEY_GLASS_DURATION, 20)));
-        int softness = sp.getInt(KEY_SCENE_SOFTNESS, Easing.DEFAULT_SOFTNESS);
-        easeStart = clamp100(sp.getInt(KEY_EASE_START, softness));
-        easeEnd = clamp100(sp.getInt(KEY_EASE_END, softness));
         lightPalette = Math.max(0, Math.min(LightColors.PALETTE_CUSTOM, sp.getInt(KEY_LIGHT_PALETTE,
                 oldViolet ? LightColors.PALETTE_VIOLET : LightColors.PALETTE_TEAL)));
         lightColors = new int[KEY_LIGHT_COLORS.length];

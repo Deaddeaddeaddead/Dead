@@ -1,48 +1,42 @@
 package com.dead.unlockvideo;
 
 /**
- * Мягкий старт и мягкая остановка движения: скорость плавно (по косинусу) нарастает от нуля в
- * начале и так же спадает к нулю в конце, посередине — ровная. Разгон и торможение могут быть
- * разной длины; обратный ход сцены берёт ту же кривую от конца (SceneClip) — точное зеркало.
+ * Мягкий старт и мягкая остановка движения: скорость плавно нарастает от нуля в начале и так
+ * же спадает к нулю в конце. Кривая симметрична — soft(1 − t) = 1 − soft(t), поэтому обратный
+ * ход — точное зеркало прямого.
  */
 final class Easing {
-    /** Плавность старта и остановки сцены по умолчанию, %. */
-    static final int DEFAULT_SOFTNESS = 60;
     /** Масштаб при разблокировке: доля времени на разгон и на торможение. */
     static final float ZOOM_RAMP = 0.35f;
 
-    /** Доля времени на разгон (или на торможение) для плавности 0..100 %. */
-    static float ramp(int softness) {
-        return 0.5f * Math.max(0, Math.min(100, softness)) / 100f;
-    }
-
     /**
-     * Ход 0..1 в момент t (0..1). ramp — доля времени на разгон и на торможение: 0 —
-     * равномерно, 0.5 — разгон до середины, затем торможение.
+     * Ход сцены 0..1 в момент t (0..1): скорость ∝ sin⁴(πt) — разгон медленнее, чем у
+     * «полусинуса» (sin²): за первую четверть времени проходится 3.8% пути вместо 9%, и так же
+     * плавно — торможение.
      */
-    static float soft(float t, float ramp) {
-        return soft(t, ramp, ramp);
-    }
-
-    /**
-     * То же с разными долями: start — на разгон в начале, end — на торможение в конце
-     * (каждая 0..0.5). Скорость: (1 − cos(π t / start)) / 2 на разгоне, 1 посередине,
-     * зеркально на торможении; всё делится на (1 − (start + end) / 2), чтобы путь был равен 1.
-     */
-    static float soft(float t, float start, float end) {
+    static float soft(float t) {
         if (t <= 0f) return 0f;
         if (t >= 1f) return 1f;
-        float a = Math.max(0f, Math.min(0.5f, start));
-        float b = Math.max(0f, Math.min(0.5f, end));
-        float scale = 1f / (1f - (a + b) / 2f);
-        if (t < a) return scale * rampPath(t, a);
-        if (t > 1f - b) return 1f - scale * rampPath(1f - t, b);
-        return scale * (t - a / 2f);
+        double a = 2 * Math.PI * t;
+        return (float) (t - 2.0 / (3 * Math.PI) * Math.sin(a)
+                + 1.0 / (12 * Math.PI) * Math.sin(2 * a));
     }
 
-    /** Путь за время x разгона длиной a (скорость растёт от 0 до 1). */
-    private static float rampPath(float x, float a) {
-        return x / 2f - (float) (a / (2 * Math.PI) * Math.sin(Math.PI * x / a));
+    /**
+     * Ход 0..1 в момент t (0..1) с разгоном и торможением по косинусу: ramp — доля времени на
+     * разгон и на торможение (0 — равномерно, 0.5 — разгон до середины).
+     */
+    static float soft(float t, float ramp) {
+        if (t <= 0f) return 0f;
+        if (t >= 1f) return 1f;
+        float a = Math.max(0f, Math.min(0.5f, ramp));
+        if (a <= 0f) return t;
+        if (t > 0.5f) return 1f - soft(1f - t, a);
+        float scale = 1f / (1f - a);
+        if (t < a) {
+            return scale * (t / 2f - (float) (a / (2 * Math.PI) * Math.sin(Math.PI * t / a)));
+        }
+        return scale * (t - a / 2f);
     }
 
     private Easing() {

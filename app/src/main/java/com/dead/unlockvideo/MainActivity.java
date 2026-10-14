@@ -133,9 +133,6 @@ public class MainActivity extends Activity {
     private final View[] squareSwatches = new View[2];
     private SeekBar brightnessBar;
     private int glassDurationMs;
-    /** Плавный старт и плавная остановка анимации сцены, %. */
-    private int easeStart;
-    private int easeEnd;
     /** Живое превью сцены в приложении. */
     private WallpaperRenderer glassRenderer;
     private SceneClip glassClip;
@@ -229,8 +226,6 @@ public class MainActivity extends Activity {
         glassTintBottom = cfg.glassTintBottom;
         glassBrightness = cfg.glassBrightness;
         glassDurationMs = cfg.glassDurationMs;
-        easeStart = cfg.easeStart;
-        easeEnd = cfg.easeEnd;
         lightPalette = cfg.lightPalette;
         lightColors = cfg.lightColors.clone();
         lightBrightness = cfg.lightBrightness;
@@ -325,27 +320,6 @@ public class MainActivity extends Activity {
                 value -> {
                     glassDurationMs = value * 100;
                     sp.edit().putInt(Prefs.KEY_GLASS_DURATION, value).apply();
-                    Prefs.bumpRevision(this);
-                    newGlassClip();
-                    playGlassPreview();
-                });
-        // Сглаживание движения: в начале — медленный разгон, в конце — плавное торможение.
-        sliderRow(glassIsland, "Плавный старт",
-                "Движение медленно разгоняется в начале — чем больше, тем дольше", 0, 100,
-                easeStart, value -> value == 0 ? "выкл." : value + "%",
-                value -> {
-                    easeStart = value;
-                    sp.edit().putInt(Prefs.KEY_EASE_START, value).apply();
-                    Prefs.bumpRevision(this);
-                    newGlassClip();
-                    playGlassPreview();
-                });
-        sliderRow(glassIsland, "Плавная остановка",
-                "Движение плавно тормозит в конце — чем больше, тем дольше", 0, 100, easeEnd,
-                value -> value == 0 ? "выкл." : value + "%",
-                value -> {
-                    easeEnd = value;
-                    sp.edit().putInt(Prefs.KEY_EASE_END, value).apply();
                     Prefs.bumpRevision(this);
                     newGlassClip();
                     playGlassPreview();
@@ -1272,8 +1246,7 @@ public class MainActivity extends Activity {
     private void newGlassClip() {
         if (glassRenderer == null) return;
         if (glassClip != null) glassClip.release();
-        SceneClip clip = new SceneClip(glassDurationMs, false, Easing.ramp(easeStart),
-                Easing.ramp(easeEnd));
+        SceneClip clip = new SceneClip(glassDurationMs, false);
         clip.setOnChange(() -> {
             if (glassRenderer != null) glassRenderer.requestSceneFrame();
         });

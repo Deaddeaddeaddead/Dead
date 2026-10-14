@@ -688,9 +688,7 @@ public class VideoWallpaperService extends WallpaperService {
                 Prefs next = Prefs.load(VideoWallpaperService.this);
                 boolean sourceChanged = next.source != cfg.source;
                 if (sourceChanged || reverseFor(next) != reverseAvailable
-                        || (next.glass() && (next.glassDurationMs != cfg.glassDurationMs
-                                || next.easeStart != cfg.easeStart
-                                || next.easeEnd != cfg.easeEnd))) {
+                        || (next.glass() && next.glassDurationMs != cfg.glassDurationMs)) {
                     closePlayers();
                 }
                 if (sourceChanged) {
@@ -1210,8 +1208,7 @@ public class VideoWallpaperService extends WallpaperService {
 
         /** Часы сцены «Стекло» для источника; рендер рисует по ним кадры. */
         private Clip sceneClip(boolean reversed, int source) {
-            SceneClip clip = new SceneClip(cfg.glassDurationMs, reversed,
-                    Easing.ramp(cfg.easeStart), Easing.ramp(cfg.easeEnd));
+            SceneClip clip = new SceneClip(cfg.glassDurationMs, reversed);
             clip.setOnChange(() -> {
                 if (renderer != null) renderer.requestSceneFrame();
             });
