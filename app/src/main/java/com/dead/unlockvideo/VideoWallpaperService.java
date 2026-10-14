@@ -185,6 +185,9 @@ public class VideoWallpaperService extends WallpaperService {
         /** Когда обои стали видны после приложения — старые наблюдения лаунчера не в счёт. */
         private long visibleSince;
         private long lastHomeStart;
+        /** Пока открыто приложение, видео уже перемотано в начало к возврату. */
+        private boolean preparedForHome;
+        private int homeRestorePosition;
 
         // Эффекты
         /** Текущий масштаб от эффекта разблокировки. */
@@ -368,6 +371,14 @@ public class VideoWallpaperService extends WallpaperService {
                 hiddenByApp = power.isInteractive() && unlocked;
                 if (!power.isInteractive()) goingOff("обои скрыты при гаснущем экране");
                 pauseAll();
+                if (hiddenByApp && cfg.startOnHome && !finishedForever && !isPreview()) {
+                    // Обои закрыло приложение — перематываем в начало сейчас, пока этого
+                    // никто не видит: при возврате видео просто начнёт играть, без рывка.
+                    homeRestorePosition = forwardPosition();
+                    preparedForHome = true;
+                    seekForward(0);
+                    log("приложение открыто — видео перемотано в начало к возврату");
+                }
                 return;
             }
             boolean backFromApp = hiddenByApp;
@@ -404,6 +415,7 @@ public class VideoWallpaperService extends WallpaperService {
          * (обои на мгновение скрылись при переходе One UI), не перезапускаем его с начала.
          */
         private void startFromHome() {
+            preparedForHome = false;
             long now = SystemClock.uptimeMillis();
             if (phase == PHASE_PLAYING && now - lastHomeStart < 1500) {
                 log("возврат на рабочий стол: видео уже идёт, продолжаем");
@@ -500,6 +512,12 @@ public class VideoWallpaperService extends WallpaperService {
             handler.removeCallbacks(unlockWatch);
             hiddenByApp = false;
             pendingHome = false; // ожидание рабочего стола не переживает сон
+            if (preparedForHome) {
+                // Блокировка прямо из приложения: незаметно возвращаем прежний кадр,
+                // чтобы AOD и реверс шли от него, как раньше.
+                preparedForHome = false;
+                if (!visible) seekForward(homeRestorePosition);
+            }
             armed = isPreview();
             // Обои видны и на AOD, поэтому переходим плавно: масштаб — к выбранному
             // для AOD, параллакс — в центр. Гироскоп выключаем (батарея).
