@@ -11,6 +11,7 @@ import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
+import android.hardware.display.DisplayManager;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.os.Build;
@@ -19,6 +20,7 @@ import android.os.Looper;
 import android.os.PowerManager;
 import android.service.wallpaper.WallpaperService;
 import android.util.Log;
+import android.view.Display;
 import android.view.SurfaceHolder;
 import android.view.animation.DecelerateInterpolator;
 
@@ -133,6 +135,36 @@ public class VideoWallpaperService extends WallpaperService {
         private boolean unlocked;
         /** Экран блокировки убран (свайпом или сразу при разблокировке пальцем). */
         private boolean keyguardGone;
+        /** Подготовка к выключению экрана уже сделана (до следующего включения). */
+        private boolean screenOffHandled;
+        private DisplayManager displayManager;
+        private int displayState = Display.STATE_ON;
+
+        /** Самый ранний сигнал: дисплей перешёл из «включён» в AOD или «выключен». */
+        private final DisplayManager.DisplayListener displayListener =
+                new DisplayManager.DisplayListener() {
+                    @Override
+                    public void onDisplayChanged(int displayId) {
+                        if (displayId != Display.DEFAULT_DISPLAY) return;
+                        Display display = displayManager.getDisplay(displayId);
+                        if (display == null) return;
+                        int state = display.getState();
+                        if (state == displayState) return;
+                        log("дисплей: " + displayStateName(state));
+                        boolean wasOn = displayState == Display.STATE_ON;
+                        displayState = state;
+                        if (wasOn && state != Display.STATE_ON) goingOff("дисплей " + displayStateName(state));
+                        if (state == Display.STATE_ON) screenOffHandled = false;
+                    }
+
+                    @Override
+                    public void onDisplayAdded(int displayId) {
+                    }
+
+                    @Override
+                    public void onDisplayRemoved(int displayId) {
+                    }
+                };
         /**
          * Был ли телефон заблокирован (требовал проверки личности), когда включился экран.
          * Если нет (отсрочка блокировки, Smart Lock), разблокировкой считаем только уход
@@ -240,6 +272,10 @@ public class VideoWallpaperService extends WallpaperService {
             loadConfig();
             unlocked = unlockedNow();
             keyguardGone = isPreview() || !keyguard.isKeyguardLocked();
+            displayManager = context.getSystemService(DisplayManager.class);
+            if (displayManager != null) {
+                displayManager.registerDisplayListener(displayListener, handler);
+            }
             sensorManager = context.getSystemService(SensorManager.class);
             gyroscope = sensorManager == null ? null
                     : sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
@@ -258,6 +294,7 @@ public class VideoWallpaperService extends WallpaperService {
             handler.removeCallbacksAndMessages(null);
             cancelUnlockZoom();
             setGyroscope(false);
+            if (displayManager != null) displayManager.unregisterDisplayListener(displayListener);
             sp.unregisterOnSharedPreferenceChangeListener(this);
             VideoWallpaperService.this.unregisterReceiver(screenReceiver);
             closePlayers();
@@ -297,6 +334,7 @@ public class VideoWallpaperService extends WallpaperService {
                 setGyroscope(false);
                 pendingHome = false;
                 hiddenByApp = power.isInteractive() && unlocked;
+                if (!power.isInteractive()) goingOff("обои скрыты при гаснущем экране");
                 pauseAll();
                 return;
             }
@@ -343,7 +381,18 @@ public class VideoWallpaperService extends WallpaperService {
         }
 
         private void onScreenOff() {
-            log("экран выключен, " + state());
+            log("экран выключен (событие), " + state());
+            goingOff("событие выключения экрана");
+        }
+
+        /**
+         * Экран гаснет (или уходит в AOD). Вызывается по самому раннему из сигналов —
+         * смена состояния дисплея, скрытие обоев, событие выключения — и только один раз.
+         */
+        private void goingOff(String reason) {
+            if (screenOffHandled) return;
+            screenOffHandled = true;
+            log("подготовка к выключению экрана: " + reason);
             unlocked = isPreview();
             keyguardGone = isPreview();
             sampleOnWake = true;
@@ -375,6 +424,7 @@ public class VideoWallpaperService extends WallpaperService {
         }
 
         private void onScreenOn() {
+            screenOffHandled = false;
             sampleWakeState();
             log("экран включён (заблокировано=" + !unlockedNow() + ") " + state());
             // Например, разблокировали лицом ещё до того, как экран включился полностью.
@@ -464,6 +514,16 @@ public class VideoWallpaperService extends WallpaperService {
             reverseAvailable = reverseUsable(cfg);
             lastFrameMs = cfg.reverseLastMs;
             finishedForever = !isPreview() && cfg.once && cfg.finished;
+        }
+
+        private String displayStateName(int state) {
+            switch (state) {
+                case Display.STATE_ON: return "включён";
+                case Display.STATE_OFF: return "выключен";
+                case Display.STATE_DOZE: return "AOD";
+                case Display.STATE_DOZE_SUSPEND: return "AOD (сон)";
+                default: return "состояние " + state;
+            }
         }
 
         private boolean reverseUsable(Prefs prefs) {
