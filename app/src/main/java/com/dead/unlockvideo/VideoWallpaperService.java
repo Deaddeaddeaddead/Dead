@@ -3,6 +3,8 @@ package com.dead.unlockvideo;
 import android.app.KeyguardManager;
 import android.app.WallpaperColors;
 import android.app.WallpaperManager;
+import android.app.wallpaper.WallpaperDescription;
+import android.content.ComponentName;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -15,6 +17,7 @@ import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
+import android.net.Uri;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
@@ -71,6 +74,15 @@ public class VideoWallpaperService extends WallpaperService {
 
     @Override
     public Engine onCreateEngine() {
+        return new VideoEngine();
+    }
+
+    /** Android 16: система передаёт сохранённое описание обоев — отмечаем в журнале. */
+    @Override
+    public Engine onCreateEngine(WallpaperDescription description) {
+        EventLog.add(this, "обои создаются по описанию системы"
+                + (description != null && description.getThumbnail() != null
+                ? ", миниатюра " + description.getThumbnail() : ""));
         return new VideoEngine();
     }
 
@@ -190,16 +202,21 @@ public class VideoWallpaperService extends WallpaperService {
                 probeHandler().post(() -> {
                     int seen = detector.probe();
                     String marker = detector.lastMarker;
-                    long took = SystemClock.uptimeMillis() - started;
-                    handler.post(() -> onProbe(gen, seen, marker, took));
+                    handler.post(() -> onProbe(gen, seen, marker, started));
                 });
             }
         };
 
-        private void onProbe(int gen, int seen, String marker, long took) {
+        private void onProbe(int gen, int seen, String marker, long started) {
             if (gen != probeGen || !recentsWatch || !visible) return;
             long now = SystemClock.uptimeMillis();
-            String when = (now - visibleSince) + "мс (опрос " + took + "мс)";
+            String when = (now - visibleSince) + "мс (опрос " + (now - started) + "мс)";
+            if (LauncherState.changedAt() > started
+                    && LauncherState.state() != LauncherState.UNKNOWN) {
+                // Пока шёл опрос, лаунчер сам сообщил, что на экране, — это свежее.
+                seen = LauncherState.state();
+                marker = "событие лаунчера";
+            }
             if (seen == LauncherState.HOME) {
                 recentsWatch = false;
                 log("рабочий стол через " + when);
@@ -774,6 +791,22 @@ public class VideoWallpaperService extends WallpaperService {
         @Override
         public WallpaperColors onComputeColors() {
             return colors;
+        }
+
+        /**
+         * Android 16: обои из превью сохраняются — отдаём системе описание с миниатюрой
+         * (кадр покоя). Её могут показать экраны, где система рисует обои картинкой.
+         */
+        @Override
+        public WallpaperDescription onApplyWallpaper(int which) {
+            Context context = VideoWallpaperService.this;
+            Uri thumbnail = StillProvider.uri(context);
+            log("система сохраняет обои (флаги " + which + ") — передаём миниатюру");
+            return new WallpaperDescription.Builder()
+                    .setComponent(new ComponentName(context, VideoWallpaperService.class))
+                    .setThumbnail(thumbnail)
+                    .setTitle(getString(R.string.wallpaper_name))
+                    .build();
         }
 
         private void loadConfig() {
