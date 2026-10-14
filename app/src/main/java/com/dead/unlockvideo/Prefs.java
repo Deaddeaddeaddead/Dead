@@ -28,7 +28,9 @@ final class Prefs {
     static final String KEY_PARALLAX = "parallax";
     static final String KEY_ZOOM_SYNC = "zoom_sync";
     static final String KEY_ZOOM_ON_DISMISS = "zoom_on_dismiss";
+    /** Устаревший переключатель; читается только для переноса значения. */
     static final String KEY_RESET_ON_SCREEN_OFF = "reset_on_screen_off";
+    static final String KEY_SCREEN_OFF_POSE = "screen_off_pose";
     static final String KEY_ZOOM_DURATION = "zoom_duration";
     // Дополнительно
     static final String KEY_SOUND = "sound";
@@ -62,6 +64,11 @@ final class Prefs {
     /** На экране блокировки видео увеличено, при разблокировке возвращается к обычному. */
     static final int ZOOM_OUT = 2;
     static final int MAX_ZOOM_AMOUNT = 25;
+
+    /** Какой масштаб ставить при выключении экрана (виден на AOD). */
+    static final int POSE_KEEP = 0;
+    static final int POSE_LOCK = 1;
+    static final int POSE_HOME = 2;
     static final int MAX_PARALLAX = 100;
     /** Длительность масштаба — в десятых долях секунды. */
     static final int MIN_ZOOM_DURATION = 1;
@@ -84,8 +91,8 @@ final class Prefs {
     final boolean zoomSync;
     /** Масштаб — только когда убирается экран блокировки, а не при распознавании лица. */
     final boolean zoomOnDismiss;
-    /** При выключении экрана сразу возвращать масштаб и параллакс в исходное. */
-    final boolean resetOnScreenOff;
+    /** Какой масштаб ставить при выключении экрана: POSE_*. */
+    final int screenOffPose;
     /** Длительность масштаба, мс (когда не «как у видео» или видео не играет). */
     final int zoomDurationMs;
     /** Сила параллакса, 0 — выключен. */
@@ -114,7 +121,9 @@ final class Prefs {
         parallax = Math.max(0, Math.min(MAX_PARALLAX, sp.getInt(KEY_PARALLAX, 0)));
         zoomSync = sp.getBoolean(KEY_ZOOM_SYNC, true);
         zoomOnDismiss = sp.getBoolean(KEY_ZOOM_ON_DISMISS, false);
-        resetOnScreenOff = sp.getBoolean(KEY_RESET_ON_SCREEN_OFF, true);
+        int pose = sp.getInt(KEY_SCREEN_OFF_POSE,
+                sp.getBoolean(KEY_RESET_ON_SCREEN_OFF, true) ? POSE_LOCK : POSE_KEEP);
+        screenOffPose = pose >= POSE_KEEP && pose <= POSE_HOME ? pose : POSE_LOCK;
         zoomDurationMs = 100 * Math.max(MIN_ZOOM_DURATION, Math.min(MAX_ZOOM_DURATION,
                 sp.getInt(KEY_ZOOM_DURATION, 7)));
         sound = sp.getBoolean(KEY_SOUND, false);

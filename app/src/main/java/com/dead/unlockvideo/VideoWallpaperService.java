@@ -352,12 +352,14 @@ public class VideoWallpaperService extends WallpaperService {
             armed = isPreview();
             cancelUnlockZoom();
             setGyroscope(false); // параллакс — в центр, гироскоп не тратит батарею
-            if (cfg.resetOnScreenOff) {
-                // Сразу в исходное — чтобы AOD не показывал обои в случайном положении.
+            // Масштаб для AOD: как на блокировке, как на рабочем столе или как есть.
+            // С рабочего стола на экране блокировки он потом плавно перейдёт к своему.
+            if (cfg.screenOffPose == Prefs.POSE_LOCK) {
                 unlockScale = lockScale();
-                applyTransform();
+            } else if (cfg.screenOffPose == Prefs.POSE_HOME) {
+                unlockScale = homeScale();
             }
-            // Иначе масштаб плавно вернётся, когда появится экран блокировки.
+            applyTransform();
             pauseAll();
             boolean atStart = forwardPosition() <= 30;
             if (cfg.lockAction == Prefs.LOCK_KEEP || atStart) return;

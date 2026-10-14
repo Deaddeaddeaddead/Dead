@@ -274,11 +274,16 @@ public class MainActivity extends Activity {
         parallaxItem.addView(description("Изображение слегка смещается, когда вы "
                 + "поворачиваете телефон (по гироскопу), и плавно возвращается к центру. "
                 + "Видео при этом немного увеличивается, чтобы не было видно краёв."));
-        switchItem(root, Prefs.KEY_RESET_ON_SCREEN_OFF, cfg.resetOnScreenOff,
-                "Сбрасывать положение при выключении экрана",
-                "Масштаб и параллакс сразу возвращаются в исходное, чтобы Always On Display "
-                        + "не показывал обои в случайном положении. Если выключено, масштаб "
-                        + "плавно вернётся, когда появится экран блокировки.");
+        Segmented poseChoice = segmented(root, "При выключении экрана (AOD)",
+                new String[] {"Как есть", "Блокировка", "Рабочий стол"}, cfg.screenOffPose,
+                index -> {
+                    sp.edit().putInt(Prefs.KEY_SCREEN_OFF_POSE, index).apply();
+                    Prefs.bumpRevision(this);
+                });
+        poseChoice.item.addView(description("Какой масштаб у обоев сразу после выключения "
+                + "экрана — его показывает Always On Display. «Рабочий стол» — когда потом "
+                + "появится экран блокировки, масштаб плавно перейдёт к его состоянию. "
+                + "Параллакс в любом случае возвращается в центр, гироскоп отключается."));
 
         // Дополнительно
         section(root, "Дополнительно");
