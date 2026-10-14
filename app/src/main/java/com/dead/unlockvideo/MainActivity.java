@@ -196,14 +196,22 @@ public class MainActivity extends Activity {
         LinearLayout detectorItem = vertical();
         LinearLayout detectorCard = card(detectorItem);
         detectorRow = row("Распознавание экрана", "");
-        detectorRow.setOnClickListener(v -> openAccessibilitySettings());
         detectorCard.addView(detectorRow);
+        LinearLayout enableRow = row("1. Включить службу",
+                "Откроется служба «Видеообои» в специальных возможностях — включите её");
+        enableRow.setOnClickListener(v -> openAccessibilitySettings());
+        detectorCard.addView(enableRow);
+        LinearLayout restrictedRow = row("2. Если написано «Ограниченная настройка»",
+                "Откроется «О приложении»: нажмите ⋮ вверху справа → «Разрешить ограниченные "
+                        + "настройки», затем снова шаг 1");
+        restrictedRow.setOnClickListener(v -> openAppDetails());
+        detectorCard.addView(restrictedRow);
         detectorItem.addView(description("Обои сами не могут отличить рабочий стол от списка "
                 + "недавних приложений или лёгкого сворачивания — One UI им этого не сообщает. "
-                + "Для этого нужна служба специальных возможностей «Видеообои»: она читает "
-                + "только экран лаунчера и ничего не сохраняет. На Android 13+ для приложений "
-                + "не из Play Маркета сначала разрешите её: Настройки → Приложения → "
-                + "Видеообои → ⋮ → «Разрешить ограниченные настройки»."));
+                + "Это делает служба специальных возможностей «Видеообои»: она получает "
+                + "события только от лаунчера и ничего не сохраняет. Пункт «Разрешить "
+                + "ограниченные настройки» появляется в меню ⋮ только после попытки включить "
+                + "службу, если система её заблокировала; если блокировки нет — шаг 2 не нужен."));
         root.addView(detectorItem);
         recentsItem = detectorItem;
         recentsSwitchItem = switchItem(root, Prefs.KEY_START_IN_RECENTS, cfg.startInRecents,
@@ -675,13 +683,32 @@ public class MainActivity extends Activity {
         TextView subtitle = (TextView) ((LinearLayout) detectorRow.getChildAt(0)).getChildAt(1);
         boolean on = detectorEnabled();
         subtitle.setText(on ? "Включено — список недавних не запускает видео"
-                : "Выключено — нажмите, чтобы включить");
+                : "Выключено — шаги ниже");
         subtitle.setTextColor(getColor(on ? R.color.text2 : R.color.accent));
     }
 
+    /** Сразу страница нашей службы; если прошивка так не умеет — общий список. */
     private void openAccessibilitySettings() {
+        Intent details = new Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
+                .putExtra(Intent.EXTRA_COMPONENT_NAME,
+                        new ComponentName(this, RecentsDetectorService.class).flattenToString());
+        try {
+            startActivity(details);
+            return;
+        } catch (ActivityNotFoundException | SecurityException ignored) {
+        }
         try {
             startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS));
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(this, "Не удалось открыть настройки", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    /** «О приложении» — там в меню ⋮ «Разрешить ограниченные настройки». */
+    private void openAppDetails() {
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", getPackageName(), null)));
         } catch (ActivityNotFoundException e) {
             Toast.makeText(this, "Не удалось открыть настройки", Toast.LENGTH_SHORT).show();
         }
