@@ -392,6 +392,34 @@ public class VideoWallpaperService extends WallpaperService {
             }
         }
 
+        /** Команды от лаунчера — пишем в журнал, чтобы найти сигнал «список недавних». */
+        @Override
+        public android.os.Bundle onCommand(String action, int x, int y, int z,
+                                           android.os.Bundle extras, boolean resultRequested) {
+            StringBuilder text = new StringBuilder("команда лаунчера: ").append(action);
+            if (extras != null && !extras.isEmpty()) {
+                text.append(" ").append(extras.keySet());
+            }
+            log(text.toString());
+            return null;
+        }
+
+        private float lastOffsetX = -1f;
+        private float lastOffsetY = -1f;
+
+        /** Смещения от лаунчера (страницы рабочего стола и т.п.) — тоже в журнал. */
+        @Override
+        public void onOffsetsChanged(float xOffset, float yOffset, float xOffsetStep,
+                                     float yOffsetStep, int xPixelOffset, int yPixelOffset) {
+            if (Math.abs(xOffset - lastOffsetX) < 0.01f && Math.abs(yOffset - lastOffsetY) < 0.01f) {
+                return;
+            }
+            lastOffsetX = xOffset;
+            lastOffsetY = yOffset;
+            log(String.format(java.util.Locale.ROOT, "смещение от лаунчера: x=%.2f y=%.2f",
+                    xOffset, yOffset));
+        }
+
         /**
          * Лаунчер сообщает, насколько отдалены обои. Масштабирует их система сама,
          * здесь это нужно только чтобы отличить список недавних от рабочего стола.
