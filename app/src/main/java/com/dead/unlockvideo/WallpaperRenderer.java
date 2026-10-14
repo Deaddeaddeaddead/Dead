@@ -46,6 +46,9 @@ final class WallpaperRenderer {
     private final AtomicBoolean drawPosted = new AtomicBoolean();
     private final Runnable drawTransform = () -> {
         drawPosted.set(false);
+        // Сцена движется — следующий её кадр и так возьмёт новый масштаб и сдвиг; лишний
+        // кадр между ними сбил бы ровный ход анимации.
+        if (this.scenePalette >= 0 && this.frameScheduled) return;
         draw();
     };
     private int pending = -1;
