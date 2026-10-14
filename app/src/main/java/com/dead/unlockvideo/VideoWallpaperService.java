@@ -839,7 +839,7 @@ public class VideoWallpaperService extends WallpaperService {
             glass = cfg.glass();
             reverseAvailable = reverseFor(cfg);
             // Позиция r назад = lastFrameMs − r вперёд; у сцены назад та же длительность.
-            lastFrameMs = glass ? cfg.glassDurationMs : cfg.reverseLastMs;
+            lastFrameMs = glass ? Easing.sceneDuration(cfg.glassDurationMs) : cfg.reverseLastMs;
             finishedForever = !isPreview() && cfg.once && cfg.finished;
         }
 
@@ -1208,7 +1208,7 @@ public class VideoWallpaperService extends WallpaperService {
 
         /** Часы сцены «Стекло» для источника; рендер рисует по ним кадры. */
         private Clip sceneClip(boolean reversed, int source) {
-            SceneClip clip = new SceneClip(cfg.glassDurationMs, reversed);
+            SceneClip clip = new SceneClip(Easing.sceneDuration(cfg.glassDurationMs), reversed);
             clip.setOnChange(() -> {
                 if (renderer != null) renderer.requestSceneFrame();
             });

@@ -2,24 +2,46 @@ package com.dead.unlockvideo;
 
 /**
  * Мягкий старт и мягкая остановка движения: скорость плавно нарастает от нуля в начале и так
- * же спадает к нулю в конце. Кривая симметрична — soft(1 − t) = 1 − soft(t), поэтому обратный
- * ход — точное зеркало прямого.
+ * же спадает к нулю в конце. Кривые симметричны — f(1 − t) = 1 − f(t), поэтому обратный ход —
+ * точное зеркало прямого.
  */
 final class Easing {
     /** Масштаб при разблокировке: доля времени на разгон и на торможение. */
     static final float ZOOM_RAMP = 0.35f;
+    /**
+     * Сцена: разгон и торможение длятся каждый такую долю основной длительности и
+     * добавляются к ней — середина идёт с исходной скоростью, медленнее становятся только
+     * начало и конец.
+     */
+    static final float SCENE_RAMP = 0.6f;
+
+    /** Вся длительность анимации сцены: основное движение плюс разгон и торможение. */
+    static int sceneDuration(int durationMs) {
+        return Math.round(durationMs * (1f + SCENE_RAMP));
+    }
 
     /**
-     * Ход сцены 0..1 в момент t (0..1): скорость ∝ sin⁴(πt) — разгон медленнее, чем у
-     * «полусинуса» (sin²): за первую четверть времени проходится 3.8% пути вместо 9%, и так же
-     * плавно — торможение.
+     * Ход сцены 0..1 в момент t (0..1 всей длительности, см. sceneDuration). Посередине —
+     * исходная скорость; в начале скорость плавно (smootherstep) растёт от нуля, в конце так
+     * же спадает до нуля.
      */
-    static float soft(float t) {
+    static float scene(float t) {
         if (t <= 0f) return 0f;
         if (t >= 1f) return 1f;
-        double a = 2 * Math.PI * t;
-        return (float) (t - 2.0 / (3 * Math.PI) * Math.sin(a)
-                + 1.0 / (12 * Math.PI) * Math.sin(2 * a));
+        // Время — в долях основной длительности.
+        float total = 1f + SCENE_RAMP;
+        float x = t * total;
+        if (x < SCENE_RAMP) return SCENE_RAMP * rampPath(x / SCENE_RAMP);
+        if (x > total - SCENE_RAMP) return 1f - SCENE_RAMP * rampPath((total - x) / SCENE_RAMP);
+        return SCENE_RAMP / 2f + (x - SCENE_RAMP);
+    }
+
+    /**
+     * Путь за долю u разгона, где скорость растёт от 0 до исходной как 6u⁵ − 15u⁴ + 10u³, — в
+     * долях пути, пройденного за всё время разгона на исходной скорости (за весь разгон — 0.5).
+     */
+    private static float rampPath(float u) {
+        return u * u * u * u * (u * u - 3f * u + 2.5f);
     }
 
     /**

@@ -314,9 +314,12 @@ public class MainActivity extends Activity {
         lightControls(glassIsland);
         squaresControls(glassIsland);
         updateColorControls();
-        sliderRow(glassIsland, "Длительность анимации", null, Prefs.MIN_GLASS_DURATION,
-                Prefs.MAX_GLASS_DURATION, glassDurationMs / 100,
-                value -> String.format(java.util.Locale.ROOT, "%.1f с", value / 10f),
+        // Значение — вся длительность: основное движение и плавные разгон и торможение.
+        sliderRow(glassIsland, "Длительность анимации",
+                "Вместе с плавным разгоном в начале и торможением в конце",
+                Prefs.MIN_GLASS_DURATION, Prefs.MAX_GLASS_DURATION, glassDurationMs / 100,
+                value -> String.format(java.util.Locale.ROOT, "%.1f с",
+                        Easing.sceneDuration(value * 100) / 1000f),
                 value -> {
                     glassDurationMs = value * 100;
                     sp.edit().putInt(Prefs.KEY_GLASS_DURATION, value).apply();
@@ -1246,13 +1249,13 @@ public class MainActivity extends Activity {
     private void newGlassClip() {
         if (glassRenderer == null) return;
         if (glassClip != null) glassClip.release();
-        SceneClip clip = new SceneClip(glassDurationMs, false);
+        SceneClip clip = new SceneClip(Easing.sceneDuration(glassDurationMs), false);
         clip.setOnChange(() -> {
             if (glassRenderer != null) glassRenderer.requestSceneFrame();
         });
         glassClip = clip;
         glassRenderer.setSceneSource(WallpaperRenderer.SOURCE_FORWARD, clip);
-        clip.seekTo(glassDurationMs);
+        clip.seekTo(Easing.sceneDuration(glassDurationMs));
     }
 
     private void playGlassPreview() {

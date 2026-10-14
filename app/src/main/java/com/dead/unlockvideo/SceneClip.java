@@ -145,7 +145,7 @@ final class SceneClip extends Clip implements WallpaperRenderer.SceneSource {
         float t = positionOf(state, SystemClock.uptimeMillis()) / (float) duration;
         // Обратный ход — та же кривая от конца: кадр в позиции p тот же, что у прямого хода
         // в позиции duration − p.
-        return Easing.soft(reversed ? 1f - t : t);
+        return Easing.scene(reversed ? 1f - t : t);
     }
 
     @Override
