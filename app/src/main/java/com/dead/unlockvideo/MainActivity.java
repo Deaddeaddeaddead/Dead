@@ -1,5 +1,6 @@
 package com.dead.unlockvideo;
 
+import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.WallpaperInfo;
@@ -31,6 +32,7 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.accessibility.AccessibilityManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -77,6 +79,8 @@ public class MainActivity extends Activity {
     private TextView lockDescription;
     private TextView noTriggerWarning;
     private View recentsItem;
+    private View recentsSwitchItem;
+    private LinearLayout detectorRow;
     private LinearLayout screenOnItem;
     private TextView screenOnNote;
     private Segmented zoomChoice;
@@ -189,7 +193,20 @@ public class MainActivity extends Activity {
                 "При возврате на рабочий стол",
                 "Видео запускается с начала, когда вы выходите из приложения "
                         + "и начинается переход на рабочий стол.");
-        recentsItem = switchItem(root, Prefs.KEY_START_IN_RECENTS, cfg.startInRecents,
+        LinearLayout detectorItem = vertical();
+        LinearLayout detectorCard = card(detectorItem);
+        detectorRow = row("Распознавание экрана", "");
+        detectorRow.setOnClickListener(v -> openAccessibilitySettings());
+        detectorCard.addView(detectorRow);
+        detectorItem.addView(description("Обои сами не могут отличить рабочий стол от списка "
+                + "недавних приложений или лёгкого сворачивания — One UI им этого не сообщает. "
+                + "Для этого нужна служба специальных возможностей «Видеообои»: она читает "
+                + "только экран лаунчера и ничего не сохраняет. На Android 13+ для приложений "
+                + "не из Play Маркета сначала разрешите её: Настройки → Приложения → "
+                + "Видеообои → ⋮ → «Разрешить ограниченные настройки»."));
+        root.addView(detectorItem);
+        recentsItem = detectorItem;
+        recentsSwitchItem = switchItem(root, Prefs.KEY_START_IN_RECENTS, cfg.startInRecents,
                 "Также в списке недавних приложений",
                 "Запускать уже при открытии списка недавних приложений (Recents), "
                         + "не дожидаясь перехода на рабочий стол.");
@@ -317,6 +334,7 @@ public class MainActivity extends Activity {
         WallpaperInfo info = WallpaperManager.getInstance(this).getWallpaperInfo();
         wallpaperActive = info != null && info.getComponent().equals(wallpaperComponent());
         updateHero();
+        updateDetectorStatus();
         updateReverseStatus();
     }
 
@@ -388,6 +406,7 @@ public class MainActivity extends Activity {
                 || checked(Prefs.KEY_START_ON_SCREEN_ON) || checked(Prefs.KEY_START_ON_HOME);
         noTriggerWarning.setVisibility(anyTrigger ? View.GONE : View.VISIBLE);
         setRowEnabled(recentsItem, checked(Prefs.KEY_START_ON_HOME));
+        setRowEnabled(recentsSwitchItem, checked(Prefs.KEY_START_ON_HOME));
         boolean zoomOn = zoomChoice.selected != Prefs.ZOOM_NONE;
         setRowEnabled(zoomAmountItem, zoomOn);
         setRowEnabled(zoomSpeedChoice.item, zoomOn);
@@ -634,6 +653,37 @@ public class MainActivity extends Activity {
             reverseStatus.setText("✓ Реверс готов");
         } else {
             reverseBox.setVisibility(View.GONE);
+        }
+    }
+
+    // ---- Распознавание экрана ----
+
+    private boolean detectorEnabled() {
+        AccessibilityManager manager = getSystemService(AccessibilityManager.class);
+        if (manager == null) return false;
+        ComponentName ours = new ComponentName(this, RecentsDetectorService.class);
+        for (AccessibilityServiceInfo info : manager.getEnabledAccessibilityServiceList(
+                AccessibilityServiceInfo.FEEDBACK_ALL_MASK)) {
+            ComponentName name = new ComponentName(info.getResolveInfo().serviceInfo.packageName,
+                    info.getResolveInfo().serviceInfo.name);
+            if (name.equals(ours)) return true;
+        }
+        return false;
+    }
+
+    private void updateDetectorStatus() {
+        TextView subtitle = (TextView) ((LinearLayout) detectorRow.getChildAt(0)).getChildAt(1);
+        boolean on = detectorEnabled();
+        subtitle.setText(on ? "Включено — список недавних не запускает видео"
+                : "Выключено — нажмите, чтобы включить");
+        subtitle.setTextColor(getColor(on ? R.color.text2 : R.color.accent));
+    }
+
+    private void openAccessibilitySettings() {
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS));
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(this, "Не удалось открыть настройки", Toast.LENGTH_SHORT).show();
         }
     }
 

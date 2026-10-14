@@ -61,7 +61,8 @@ public class VideoWallpaperService extends WallpaperService {
     }
 
     private final class VideoEngine extends Engine
-            implements SharedPreferences.OnSharedPreferenceChangeListener {
+            implements SharedPreferences.OnSharedPreferenceChangeListener,
+            LauncherState.Listener {
 
         /** Серия ждёт запуска по событию. */
         private static final int PHASE_WAITING = 0;
@@ -290,6 +291,7 @@ public class VideoWallpaperService extends WallpaperService {
             keyguard = context.getSystemService(KeyguardManager.class);
             sp = Prefs.prefs(context);
             sp.registerOnSharedPreferenceChangeListener(this);
+            LauncherState.addListener(this);
 
             IntentFilter filter = new IntentFilter();
             filter.addAction(Intent.ACTION_SCREEN_OFF);
@@ -328,6 +330,7 @@ public class VideoWallpaperService extends WallpaperService {
             setGyroscope(false);
             if (displayManager != null) displayManager.unregisterDisplayListener(displayListener);
             sp.unregisterOnSharedPreferenceChangeListener(this);
+            LauncherState.removeListener(this);
             VideoWallpaperService.this.unregisterReceiver(screenReceiver);
             closePlayers();
             releaseRenderer();
@@ -376,7 +379,19 @@ public class VideoWallpaperService extends WallpaperService {
             setGyroscope(cfg.parallax > 0);
             // Появился экран блокировки — масштаб плавно возвращается к его состоянию.
             if (!unlocked) animateUnlockZoom(lockScale(), lockZoomDuration());
-            if (backFromApp && cfg.startOnHome && !isPreview()) {
+            if (backFromApp && cfg.startOnHome && !isPreview() && !cfg.startInRecents
+                    && LauncherState.serviceRunning()) {
+                // Служба специальных возможностей знает, что на экране: запускаем, только
+                // когда это рабочий стол (не список недавних и не лёгкое сворачивание).
+                if (LauncherState.state() == LauncherState.HOME) {
+                    log("запуск: возврат на рабочий стол");
+                    triggerForward(true);
+                } else {
+                    pendingHome = true;
+                    log("ждём рабочего стола (сейчас: "
+                            + LauncherState.name(LauncherState.state()) + ")");
+                }
+            } else if (backFromApp && cfg.startOnHome && !isPreview()) {
                 if (cfg.startInRecents || !zoomReported || launcherZoom < HOME_ZOOM_THRESHOLD) {
                     log("запуск: возврат на рабочий стол");
                     triggerForward(true);
@@ -389,6 +404,16 @@ public class VideoWallpaperService extends WallpaperService {
                 startReverse();
             } else {
                 resume();
+            }
+        }
+
+        /** Служба специальных возможностей сообщила, что теперь на экране. */
+        @Override
+        public void onLauncherState(int state) {
+            if (pendingHome && visible && state == LauncherState.HOME) {
+                pendingHome = false;
+                log("запуск: возврат на рабочий стол");
+                triggerForward(true);
             }
         }
 

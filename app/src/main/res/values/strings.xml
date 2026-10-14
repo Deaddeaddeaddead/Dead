@@ -3,4 +3,6 @@
     <string name="app_name">Видеообои</string>
     <string name="wallpaper_name">Видео после разблокировки</string>
     <string name="wallpaper_description">Видеообои с настройкой количества проигрываний и запуском после разблокировки</string>
+    <string name="accessibility_label">Видеообои: распознавание списка недавних</string>
+    <string name="accessibility_description">Определяет, что на экране — рабочий стол или список недавних приложений, чтобы видеообои запускались только при возврате на рабочий стол. Читается только экран лаунчера; ничего не сохраняется и не передаётся.</string>
 </resources>
