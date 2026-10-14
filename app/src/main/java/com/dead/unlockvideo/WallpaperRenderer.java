@@ -28,6 +28,12 @@ final class WallpaperRenderer {
     private static final long SWITCH_TIMEOUT_MS = 300;
     /** Порог изменения масштаба и сдвига (доля кадра) — около трети пикселя. */
     private static final float TRANSFORM_EPSILON = 0.0003f;
+    /**
+     * Параллакс сцены: во сколько раз сдвиг точки зрения (в единицах сцены) больше сдвига
+     * кадра. На 100% кадр сдвигается до ~5% ширины, точка зрения — до ~0.25: стёкла уходят
+     * относительно капсулы примерно на 1.5% ширины, и заметно меняется вид сквозь них.
+     */
+    private static final float SCENE_VIEW_PER_SHIFT = 4.7f;
 
     private final HandlerThread thread = new HandlerThread("wallpaper-gl");
     private final Handler handler;
@@ -367,7 +373,9 @@ final class WallpaperRenderer {
             }
             deleteStill();
             computeCrop(GlassScene.FRAME_WIDTH, GlassScene.FRAME_HEIGHT);
-            scene.draw(viewWidth, viewHeight, crop, source.progress(), scenePalette);
+            scene.draw(viewWidth, viewHeight, crop, source.progress(), scenePalette,
+                    shiftX * SCENE_VIEW_PER_SHIFT,
+                    shiftY * SCENE_VIEW_PER_SHIFT * GlassScene.FRAME_HEIGHT / GlassScene.FRAME_WIDTH);
             egl.swap(-1);
             return;
         }

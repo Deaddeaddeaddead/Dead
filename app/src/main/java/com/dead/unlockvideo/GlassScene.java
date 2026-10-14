@@ -19,8 +19,9 @@ import java.nio.FloatBuffer;
  * лежат таблицей в assets/glass_light.bin (по времени ролика). Стекло — толстая выпуклая
  * «таблетка», снятая перспективной камерой: преломление (у торцов — как у тела вращения, без
  * изломов) и полное отражение у кромки считаются в шейдере, параметры подобраны по кадрам,
- * поэтому кусок под стеклом отрывается от кромки, как в ролике. Картинка гладкая и чёткая в
- * любом разрешении и перекрашивается в палитру.
+ * поэтому кусок под стеклом отрывается от кромки, как в ролике. При параллаксе стёкла, как
+ * более близкие к глазу, сдвигаются относительно капсулы, а вид сквозь них меняется. Картинка
+ * гладкая и чёткая в любом разрешении и перекрашивается в палитру.
  */
 final class GlassScene {
     /** Сцена построена на кадре этого размера и обрезается под экран так же, как видео. */
@@ -77,6 +78,9 @@ final class GlassScene {
             + "// сетка свечения внутри капсулы (см. gridLight); 12 — яркость узкой линии у видимого сквозь\n"
             + "// стекло края капсулы (R).\n"
             + "uniform sampler2D uLight;\n"
+            + "// Сдвиг точки зрения (параллакс от наклона телефона) в единицах сцены: стёкла ближе к глазу,\n"
+            + "// чем светящийся слой, — смещаются против сдвига, а преломление считается из сдвинутой камеры.\n"
+            + "uniform vec2 uView;\n"
             + "// 0 — фон, 1 — свечение внутри (угли), 2 — ореол, 3 — подсветка углов фона\n"
             + "uniform vec3 uPal[4];\n"
             + "\n"
@@ -194,6 +198,9 @@ final class GlassScene {
             + "const float GLASS_GAP = 0.03;\n"
             + "const vec2 CAMERA = vec2(0.0844, 0.0591);\n"
             + "const float CAMERA_DIST = 1.5457;\n"
+            + "// Насколько стёкла (их середина по высоте, ~0.09 над слоем) сдвигаются на экране при сдвиге\n"
+            + "// камеры: z / (CAMERA_DIST − z).\n"
+            + "const float GLASS_PARALLAX = 0.062;\n"
             + "// Кромка стекла по средним профилям ролика: тёмная линия по самой кромке (сила, ширина\n"
             + "// снаружи и внутри); кант разгорается от кромки до RAMP1 и ярче таблицы (она — среднее по\n"
             + "// полосе, вместе с тёмной линией); переход от полного отражения к видимому сквозь стекло —\n"
@@ -281,8 +288,8 @@ final class GlassScene {
             + "  vec2 p = (f - 0.5) * vec2(1.0, ASPECT);\n"
             + "  float pxw = uCrop.x / uRes.x;\n"
             + "  float k = 1.0 - uProgress;\n"
-            + "  vec2 top = TOP_END + AXIS * TRAVEL * k;\n"
-            + "  vec2 bot = BOTTOM_END - AXIS * TRAVEL * k;\n"
+            + "  vec2 top = TOP_END + AXIS * TRAVEL * k - uView * GLASS_PARALLAX;\n"
+            + "  vec2 bot = BOTTOM_END - AXIS * TRAVEL * k - uView * GLASS_PARALLAX;\n"
             + "  vec2 n;\n"
             + "  float d1 = capsule(p, top, GLASS_HALF_LEN, GLASS_RADIUS, n);\n"
             + "  float d2 = capsule(p, bot, GLASS_HALF_LEN, GLASS_RADIUS, n);\n"
@@ -299,7 +306,7 @@ final class GlassScene {
             + "    vec2 axisPoint = c0 + AXIS * clamp(dot(p - c0, AXIS), -GLASS_HALF_LEN, GLASS_HALF_LEN);\n"
             + "    float dp = length(p - axisPoint);\n"
             + "    vec2 radial = (p - axisPoint) / max(dp, 1e-5);\n"
-            + "    vec2 ray = (p - CAMERA) / CAMERA_DIST;\n"
+            + "    vec2 ray = (p - CAMERA - uView) / CAMERA_DIST;\n"
             + "    float ar = dot(ray, radial);\n"
             + "    vec2 optics = glassOptics(dp, ar);\n"
             + "    // Граница полного отражения: где луч внутри стекла упирается в предельный угол. Её\n"
@@ -356,6 +363,7 @@ final class GlassScene {
     private final int time;
     private final int lightUniform;
     private final int palette;
+    private final int view;
     private final int lightTexture;
     private final FloatBuffer quad = ByteBuffer.allocateDirect(8 * 4)
             .order(ByteOrder.nativeOrder()).asFloatBuffer();
@@ -389,6 +397,7 @@ final class GlassScene {
         time = GLES20.glGetUniformLocation(program, "uTime");
         lightUniform = GLES20.glGetUniformLocation(program, "uLight");
         palette = GLES20.glGetUniformLocation(program, "uPal");
+        view = GLES20.glGetUniformLocation(program, "uView");
         quad.put(new float[] {-1, -1, 1, -1, -1, 1, 1, 1}).position(0);
         int[] id = new int[1];
         GLES20.glGenTextures(1, id, 0);
@@ -419,9 +428,12 @@ final class GlassScene {
 
     /**
      * t — момент ролика (0..1). cropBox — видимая часть кадра сцены (как у видео): доля по X
-     * и Y, левый нижний угол.
+     * и Y, левый нижний угол. viewX, viewY — сдвиг точки зрения для параллакса (в единицах
+     * сцены, ширина кадра — 1): стёкла смещаются относительно светящейся капсулы, а
+     * преломление в них считается из сдвинутой точки.
      */
-    void draw(int width, int height, float[] cropBox, float t, int paletteIndex) {
+    void draw(int width, int height, float[] cropBox, float t, int paletteIndex,
+            float viewX, float viewY) {
         float clamped = Math.max(0f, Math.min(1f, t));
         GLES20.glViewport(0, 0, width, height);
         GLES20.glUseProgram(program);
@@ -429,6 +441,7 @@ final class GlassScene {
         GLES20.glUniform4f(crop, cropBox[0], cropBox[1], cropBox[2], cropBox[3]);
         GLES20.glUniform1f(progress, motion(clamped));
         GLES20.glUniform1f(time, clamped);
+        GLES20.glUniform2f(view, viewX, viewY);
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, lightTexture);
         GLES20.glUniform1i(lightUniform, 0);
