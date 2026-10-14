@@ -150,6 +150,7 @@ public class VideoWallpaperService extends WallpaperService {
         /** Текущий масштаб от эффекта разблокировки. */
         private float unlockScale = 1f;
         private ValueAnimator unlockAnimator;
+        private float unlockTarget;
         private SensorManager sensorManager;
         private Sensor gyroscope;
         private boolean gyroscopeOn;
@@ -300,6 +301,8 @@ public class VideoWallpaperService extends WallpaperService {
             hiddenByApp = false;
             watchUnlock();
             setGyroscope(cfg.parallax > 0);
+            // Появился экран блокировки — масштаб плавно возвращается к его состоянию.
+            if (!unlocked) animateUnlockZoom(lockScale());
             if (backFromApp && cfg.startOnHome && !isPreview()) {
                 if (cfg.startInRecents || !zoomReported || launcherZoom < HOME_ZOOM_THRESHOLD) {
                     log("запуск: возврат на рабочий стол");
@@ -343,9 +346,8 @@ public class VideoWallpaperService extends WallpaperService {
             handler.removeCallbacks(unlockWatch);
             hiddenByApp = false;
             armed = isPreview();
+            // Масштаб оставляем как есть — обратно он поедет на экране блокировки.
             cancelUnlockZoom();
-            unlockScale = lockScale();
-            applyTransform();
             pauseAll();
             boolean atStart = forwardPosition() <= 30;
             if (cfg.lockAction == Prefs.LOCK_KEEP || atStart) return;
@@ -369,6 +371,7 @@ public class VideoWallpaperService extends WallpaperService {
                 return;
             }
             watchUnlock();
+            if (visible && !unlocked) animateUnlockZoom(lockScale());
             if (startOnScreenOn()) {
                 log("запуск: включение экрана");
                 triggerForward(false);
@@ -472,8 +475,10 @@ public class VideoWallpaperService extends WallpaperService {
         }
 
         private void animateUnlockZoom(float target) {
+            if (unlockAnimator != null && Math.abs(unlockTarget - target) < 0.001f) return;
             cancelUnlockZoom();
             if (Math.abs(unlockScale - target) < 0.001f) return;
+            unlockTarget = target;
             unlockAnimator = ValueAnimator.ofFloat(unlockScale, target);
             unlockAnimator.setDuration(UNLOCK_ZOOM_MS);
             unlockAnimator.setInterpolator(new DecelerateInterpolator(1.5f));
