@@ -26,6 +26,8 @@ final class Prefs {
     static final String KEY_UNLOCK_ZOOM = "unlock_zoom";
     static final String KEY_UNLOCK_ZOOM_AMOUNT = "unlock_zoom_amount";
     static final String KEY_PARALLAX = "parallax";
+    static final String KEY_ZOOM_SYNC = "zoom_sync";
+    static final String KEY_ZOOM_DURATION = "zoom_duration";
     // Дополнительно
     static final String KEY_SOUND = "sound";
 
@@ -59,6 +61,9 @@ final class Prefs {
     static final int ZOOM_OUT = 2;
     static final int MAX_ZOOM_AMOUNT = 25;
     static final int MAX_PARALLAX = 100;
+    /** Длительность масштаба — в десятых долях секунды. */
+    static final int MIN_ZOOM_DURATION = 1;
+    static final int MAX_ZOOM_DURATION = 40;
 
     final boolean startOnUnlock;
     final boolean startOnScreenOn;
@@ -73,6 +78,10 @@ final class Prefs {
     final int unlockZoom;
     /** Сила масштаба при разблокировке, в процентах. */
     final int unlockZoomAmount;
+    /** Масштаб длится столько же, сколько играет видео. */
+    final boolean zoomSync;
+    /** Длительность масштаба, мс (когда не «как у видео» или видео не играет). */
+    final int zoomDurationMs;
     /** Сила параллакса, 0 — выключен. */
     final int parallax;
     final boolean sound;
@@ -97,6 +106,9 @@ final class Prefs {
         unlockZoomAmount = Math.max(1, Math.min(MAX_ZOOM_AMOUNT,
                 sp.getInt(KEY_UNLOCK_ZOOM_AMOUNT, 8)));
         parallax = Math.max(0, Math.min(MAX_PARALLAX, sp.getInt(KEY_PARALLAX, 0)));
+        zoomSync = sp.getBoolean(KEY_ZOOM_SYNC, true);
+        zoomDurationMs = 100 * Math.max(MIN_ZOOM_DURATION, Math.min(MAX_ZOOM_DURATION,
+                sp.getInt(KEY_ZOOM_DURATION, 7)));
         sound = sp.getBoolean(KEY_SOUND, false);
         reverseReady = sp.getBoolean(KEY_REVERSE_READY, false)
                 && sp.getInt(KEY_REVERSE_FORMAT, 1) == REVERSE_FORMAT;

@@ -81,6 +81,8 @@ public class MainActivity extends Activity {
     private TextView screenOnNote;
     private Segmented zoomChoice;
     private View zoomAmountItem;
+    private Segmented zoomSpeedChoice;
+    private View zoomDurationItem;
     private LinearLayout reverseBox;
     private ProgressBar reverseProgress;
     private TextView reverseStatus;
@@ -242,6 +244,23 @@ public class MainActivity extends Activity {
                     sp.edit().putInt(Prefs.KEY_UNLOCK_ZOOM_AMOUNT, value).apply();
                     Prefs.bumpRevision(this);
                 });
+        zoomSpeedChoice = segmented(root, "Скорость масштаба",
+                new String[] {"Как у видео", "Своя"}, cfg.zoomSync ? 0 : 1, index -> {
+                    sp.edit().putBoolean(Prefs.KEY_ZOOM_SYNC, index == 0).apply();
+                    Prefs.bumpRevision(this);
+                    updateEnabled();
+                });
+        zoomSpeedChoice.item.addView(description("«Как у видео» — масштаб меняется, пока "
+                + "играет видео (или реверс). Если видео в этот момент не играет, "
+                + "используется своя длительность."));
+        zoomDurationItem = sliderItem(root, "Своя длительность масштаба",
+                Prefs.MIN_ZOOM_DURATION, Prefs.MAX_ZOOM_DURATION,
+                cfg.zoomDurationMs / 100,
+                value -> String.format(java.util.Locale.ROOT, "%.1f с", value / 10f),
+                value -> {
+                    sp.edit().putInt(Prefs.KEY_ZOOM_DURATION, value).apply();
+                    Prefs.bumpRevision(this);
+                });
         LinearLayout parallaxItem = sliderItem(root, "Параллакс", 0, Prefs.MAX_PARALLAX,
                 cfg.parallax, value -> value == 0 ? "выкл." : value + "%", value -> {
                     sp.edit().putInt(Prefs.KEY_PARALLAX, value).apply();
@@ -352,7 +371,10 @@ public class MainActivity extends Activity {
                 || checked(Prefs.KEY_START_ON_SCREEN_ON) || checked(Prefs.KEY_START_ON_HOME);
         noTriggerWarning.setVisibility(anyTrigger ? View.GONE : View.VISIBLE);
         setRowEnabled(recentsItem, checked(Prefs.KEY_START_ON_HOME));
-        setRowEnabled(zoomAmountItem, zoomChoice.selected != Prefs.ZOOM_NONE);
+        boolean zoomOn = zoomChoice.selected != Prefs.ZOOM_NONE;
+        setRowEnabled(zoomAmountItem, zoomOn);
+        setRowEnabled(zoomSpeedChoice.item, zoomOn);
+        setRowEnabled(zoomDurationItem, zoomOn);
         boolean reverse = lockChoice.selected == Prefs.LOCK_REVERSE;
         setRowEnabled(screenOnItem, !reverse);
         screenOnNote.setVisibility(reverse ? View.VISIBLE : View.GONE);

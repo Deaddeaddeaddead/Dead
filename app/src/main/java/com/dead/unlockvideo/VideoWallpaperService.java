@@ -42,7 +42,8 @@ public class VideoWallpaperService extends WallpaperService {
      * недавних). Когда оно падает ниже этого порога, начался переход на рабочий стол.
      */
     private static final float HOME_ZOOM_THRESHOLD = 0.6f;
-    private static final long UNLOCK_ZOOM_MS = 650;
+    /** Короче этого масштаб не делаем — иначе выглядит как скачок. */
+    private static final int MIN_ZOOM_MS = 150;
     /** Параллакс на 100%: дополнительный масштаб, дающий запас для сдвига. */
     private static final float PARALLAX_MAX_ZOOM = 0.12f;
     /** Поворот (рад), при котором сдвиг доходит до края запаса. */
@@ -302,7 +303,7 @@ public class VideoWallpaperService extends WallpaperService {
             watchUnlock();
             setGyroscope(cfg.parallax > 0);
             // Появился экран блокировки — масштаб плавно возвращается к его состоянию.
-            if (!unlocked) animateUnlockZoom(lockScale());
+            if (!unlocked) animateUnlockZoom(lockScale(), lockZoomDuration());
             if (backFromApp && cfg.startOnHome && !isPreview()) {
                 if (cfg.startInRecents || !zoomReported || launcherZoom < HOME_ZOOM_THRESHOLD) {
                     log("запуск: возврат на рабочий стол");
@@ -371,7 +372,7 @@ public class VideoWallpaperService extends WallpaperService {
                 return;
             }
             watchUnlock();
-            if (visible && !unlocked) animateUnlockZoom(lockScale());
+            if (visible && !unlocked) animateUnlockZoom(lockScale(), lockZoomDuration());
             if (startOnScreenOn()) {
                 log("запуск: включение экрана");
                 triggerForward(false);
@@ -392,8 +393,8 @@ public class VideoWallpaperService extends WallpaperService {
             }
             unlocked = true;
             handler.removeCallbacks(unlockWatch);
-            animateUnlockZoom(homeScale());
             if (reversing) stopReverse();
+            animateUnlockZoom(homeScale(), unlockZoomDuration());
             if (cfg.startOnUnlock) {
                 log("запуск: разблокировка");
                 triggerForward(false);
@@ -470,17 +471,43 @@ public class VideoWallpaperService extends WallpaperService {
 
         private void applyTransform() {
             if (renderer == null) return;
+            // Эффекты складываются, а не перемножаются: размах покачивания зависит
+            // только от силы параллакса и не растёт от масштаба при разблокировке.
             float parallaxZoom = 1f + PARALLAX_MAX_ZOOM * cfg.parallax / 100f;
-            renderer.setTransform(unlockScale * parallaxZoom, tiltX, tiltY);
+            float parallaxMargin = (1f - 1f / parallaxZoom) / 2f;
+            renderer.setTransform(unlockScale + parallaxZoom - 1f,
+                    tiltX * parallaxMargin, tiltY * parallaxMargin);
         }
 
-        private void animateUnlockZoom(float target) {
+        /**
+         * Сколько длится масштаб при разблокировке: «как у видео» — пока видео играет
+         * вперёд (с текущего кадра до конца), иначе — своя длительность.
+         */
+        private int unlockZoomDuration() {
+            if (cfg.zoomSync && cfg.startOnUnlock && !finishedForever && forwardReady) {
+                int end = forwardEndMs();
+                int position = forwardPosition();
+                int remaining = position >= end - END_EPSILON_MS ? end : end - position;
+                return Math.max(MIN_ZOOM_MS, remaining);
+            }
+            return cfg.zoomDurationMs;
+        }
+
+        /** На экране блокировки: «как у видео» — пока идёт реверс, иначе — своя длительность. */
+        private int lockZoomDuration() {
+            if (cfg.zoomSync && needReverse && reverseAvailable && !startOnScreenOn()) {
+                return Math.max(MIN_ZOOM_MS, forwardPosition());
+            }
+            return cfg.zoomDurationMs;
+        }
+
+        private void animateUnlockZoom(float target, int durationMs) {
             if (unlockAnimator != null && Math.abs(unlockTarget - target) < 0.001f) return;
             cancelUnlockZoom();
             if (Math.abs(unlockScale - target) < 0.001f) return;
             unlockTarget = target;
             unlockAnimator = ValueAnimator.ofFloat(unlockScale, target);
-            unlockAnimator.setDuration(UNLOCK_ZOOM_MS);
+            unlockAnimator.setDuration(durationMs);
             unlockAnimator.setInterpolator(new DecelerateInterpolator(1.5f));
             unlockAnimator.addUpdateListener(a -> {
                 unlockScale = (float) a.getAnimatedValue();
