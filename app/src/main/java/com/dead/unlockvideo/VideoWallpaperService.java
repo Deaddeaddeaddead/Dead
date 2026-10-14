@@ -136,6 +136,10 @@ public class VideoWallpaperService extends WallpaperService {
         private boolean keyguardGone;
         /** Подготовка к выключению экрана уже сделана (до следующего включения). */
         private boolean screenOffHandled;
+        /** На AOD видео доигрывает вперёд до конца («рабочий стол»). */
+        private boolean aodForward;
+        /** При включении экрана мгновенно вернуться к началу. */
+        private boolean rewindOnScreenOn;
         private DisplayManager displayManager;
         private int displayState = Display.STATE_ON;
 
@@ -421,6 +425,7 @@ public class VideoWallpaperService extends WallpaperService {
             if (screenOffHandled) return;
             screenOffHandled = true;
             log("подготовка к выключению экрана: " + reason);
+            boolean wasUnlocked = unlocked;
             unlocked = isPreview();
             keyguardGone = isPreview();
             sampleOnWake = true;
@@ -434,21 +439,58 @@ public class VideoWallpaperService extends WallpaperService {
             animateTransform(target, cfg.zoomDurationMs, true);
             setGyroscope(false);
             pauseAll();
+            // Прерванная серия сбрасывается — дальше ждём нового запуска.
+            if (phase == PHASE_PLAYING && cfg.lockAction != Prefs.LOCK_KEEP) {
+                phase = PHASE_WAITING;
+            }
+
+            // Кадр на AOD (обои видны и там): «рабочий стол» — доигрываем вперёд до конца,
+            // а возврат к началу будет на экране блокировки.
+            if (cfg.screenOffPose == Prefs.POSE_HOME && wasUnlocked && !cfg.infinite()) {
+                needReverse = cfg.lockAction == Prefs.LOCK_REVERSE && reverseAvailable;
+                rewindOnScreenOn = cfg.lockAction == Prefs.LOCK_REWIND;
+                playToEndOnAod();
+                return;
+            }
             boolean atStart = forwardPosition() <= 30;
             if (cfg.lockAction == Prefs.LOCK_KEEP || atStart) return;
             if (cfg.lockAction == Prefs.LOCK_REVERSE && reverseAvailable) {
-                // Назад проиграем на экране блокировки, когда он появится.
                 needReverse = true;
+                if (cfg.screenOffPose == Prefs.POSE_LOCK) {
+                    // «Блокировка»: реверс играет прямо на AOD.
+                    startReverse();
+                }
+                // Иначе — на экране блокировки, когда он появится.
             } else {
-                // Мгновенно, пока экран выключен — к включению на экране первый кадр.
+                // Мгновенно — к включению на экране первый кадр.
                 seekForward(0);
             }
-            // Прерванная серия сбрасывается — дальше ждём нового запуска.
-            if (phase == PHASE_PLAYING) phase = PHASE_WAITING;
+        }
+
+        /** На AOD доигрываем видео вперёд до конца (состояние рабочего стола). */
+        private void playToEndOnAod() {
+            if (forward == null || !forwardReady) return;
+            if (forwardPosition() >= forwardEndMs() - END_EPSILON_MS) {
+                if (!cfg.endOnLastFrame) seekForward(0);
+                return;
+            }
+            aodForward = true;
+            log("▶ AOD: доигрываем до конца с " + forward.getCurrentPosition() + "мс");
+            renderer.showSource(WallpaperRenderer.SOURCE_FORWARD);
+            forward.start();
         }
 
         private void onScreenOn() {
             screenOffHandled = false;
+            if (aodForward) {
+                // Экран включили раньше, чем видео доиграло на AOD — останавливаемся здесь.
+                aodForward = false;
+                if (forward != null && forwardReady && forward.isPlaying()) forward.pause();
+            }
+            if (rewindOnScreenOn) {
+                rewindOnScreenOn = false;
+                seekForward(0);
+            }
             sampleWakeState();
             log("экран включён (заблокировано=" + !unlockedNow() + ") " + state());
             // Например, разблокировали лицом ещё до того, как экран включился полностью.
@@ -738,6 +780,7 @@ public class VideoWallpaperService extends WallpaperService {
         }
 
         private void startReverse() {
+            if (reversing) return;
             if (!reverseAvailable || backward == null || !backwardReady || !visible) return;
             int position = forwardPosition();
             needReverse = false;
@@ -772,6 +815,17 @@ public class VideoWallpaperService extends WallpaperService {
         private void onForwardCompleted(MediaPlayer mp) {
             if (mp != forward || cfg.infinite()) return;
             log("■ видео доиграло до конца");
+            if (aodForward) {
+                // Доиграли на AOD — это не новое проигрывание серии.
+                aodForward = false;
+                phase = PHASE_DONE;
+                if (cfg.endOnLastFrame) {
+                    positionMs = AT_END;
+                } else {
+                    seekForward(0);
+                }
+                return;
+            }
             playsLeft--;
             if (playsLeft > 0) {
                 mp.start(); // после окончания start() начинает с начала
