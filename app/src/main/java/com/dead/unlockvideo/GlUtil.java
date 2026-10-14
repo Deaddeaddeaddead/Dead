@@ -1,5 +1,6 @@
 package com.dead.unlockvideo;
 
+import android.content.res.AssetManager;
 import android.opengl.EGL14;
 import android.opengl.EGLConfig;
 import android.opengl.EGLContext;
@@ -12,10 +13,13 @@ import android.opengl.GLES20;
 import android.opengl.GLUtils;
 import android.view.Surface;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
+import java.nio.charset.StandardCharsets;
 
 /** EGL-окружение и отрисовка кадра: видео (внешняя текстура) или картинки. */
 final class GlUtil {
@@ -34,6 +38,27 @@ final class GlUtil {
             throw new IOException("шейдер не собрался: " + GLES20.glGetProgramInfoLog(program));
         }
         return program;
+    }
+
+    /** Линейная фильтрация и края без повтора — у текущей текстуры GL_TEXTURE_2D. */
+    static void linearClamp() {
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S,
+                GLES20.GL_CLAMP_TO_EDGE);
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T,
+                GLES20.GL_CLAMP_TO_EDGE);
+    }
+
+    /** Текстовый файл из assets (шейдер) целиком. */
+    static String asset(AssetManager assets, String path) throws IOException {
+        try (InputStream in = assets.open(path)) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) > 0) out.write(buffer, 0, read);
+            return out.toString(StandardCharsets.UTF_8.name());
+        }
     }
 
     /** EGL-контекст, рисующий в заданную поверхность. Живёт на одном потоке. */

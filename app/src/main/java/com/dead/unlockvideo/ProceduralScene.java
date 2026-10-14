@@ -78,13 +78,12 @@ final class ProceduralScene implements Scene {
     @Override
     public void draw(int width, int height, float[] cropBox, float t, float[] pal, float viewX,
             float viewY) {
-        // Ход — с замедлением к концу.
-        float rest = 1f - Math.max(0f, Math.min(1f, t));
+        // Мягкий старт и остановка — уже в t (SceneClip).
         GLES20.glViewport(0, 0, width, height);
         GLES20.glUseProgram(program);
         GLES20.glUniform2f(res, width, height);
         GLES20.glUniform4f(crop, cropBox[0], cropBox[1], cropBox[2], cropBox[3]);
-        GLES20.glUniform1f(progress, 1f - rest * rest * rest);
+        GLES20.glUniform1f(progress, Math.max(0f, Math.min(1f, t)));
         GLES20.glUniform3fv(palette, 4, pal, 0);
         GLES20.glUniform3fv(glassColor, 2, pal, 12);
         GLES20.glUniform2f(glassTint, pal[18], pal[19]);

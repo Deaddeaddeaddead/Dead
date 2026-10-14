@@ -278,7 +278,7 @@ final class WallpaperRenderer {
     }
 
     /**
-     * Режим «Сцена»: сцена id (ScenePresets.*) с палитрой palette (GlassScene.palette);
+     * Режим «Сцена»: сцена id (ScenePresets.*) с настройками palette (ScenePresets.params);
      * palette null — обратно к видео.
      */
     void setScene(int id, float[] palette) {
@@ -375,9 +375,9 @@ final class WallpaperRenderer {
             if (source == null) return;
             if (scene == null) {
                 try {
-                    String light = ScenePresets.light(sceneId);
                     scene = sceneId == ScenePresets.ORIGINAL ? new GlassScene()
-                            : light != null ? new LightScene(light)
+                            : sceneId == ScenePresets.RIBBONS ? new LightScene()
+                            : sceneId == ScenePresets.SQUARES ? new SquaresScene()
                             : new ProceduralScene(ScenePresets.shader(sceneId));
                 } catch (java.io.IOException e) {
                     Log.w(TAG, "scene shader failed", e);

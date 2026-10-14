@@ -588,7 +588,7 @@ final class GlassScene implements Scene {
     }
 
     /** Цвет полной яркости (наибольший канал — 1) по оттенку и насыщенности. */
-    private static float[] hsvToRgb(float hue, float sat) {
+    static float[] hsvToRgb(float hue, float sat) {
         float h = ((hue % 360f) + 360f) % 360f / 60f;
         int sector = Math.min(5, (int) h);
         float f = h - sector;

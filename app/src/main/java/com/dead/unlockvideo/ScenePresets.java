@@ -1,47 +1,53 @@
 package com.dead.unlockvideo;
 
 /**
- * Сцены на выбор. «Оригинал» — копия ролика (GlassScene, свет снят с видео); «Свет» — копии
- * роликов со спиралями (LightScene); остальные — свои шейдеры из assets/scenes
- * (ProceduralScene). Номера сцен постоянные — по ним сохраняется выбор; в списке — только те,
- * что есть сейчас.
+ * Сцены на выбор. «Оригинал» — копия ролика (GlassScene, свет снят с видео); «Ленты» — копия
+ * роликов со спиралями (LightScene); «Квадраты» — стеклянные квадраты с их светом
+ * (SquaresScene); остальные — свои шейдеры из assets/scenes (ProceduralScene). Номера сцен
+ * постоянные — по ним сохраняется выбор; в списке — только те, что есть сейчас.
  */
 final class ScenePresets {
     static final int ORIGINAL = 0;
     static final int WAVES = 5;
-    static final int LIGHT_TEAL = 7;
-    static final int LIGHT_VIOLET = 8;
+    static final int RIBBONS = 7;
+    /** Были «Ленты» в фиолетовом — теперь это цвет «Лент» (см. Prefs). */
+    static final int RIBBONS_VIOLET_OLD = 8;
+    static final int SQUARES = 9;
     /** Сцены в порядке показа. */
-    static final int[] LIST = {ORIGINAL, LIGHT_TEAL, LIGHT_VIOLET, WAVES};
+    static final int[] LIST = {ORIGINAL, RIBBONS, SQUARES, WAVES};
 
     static String title(int id) {
         switch (id) {
             case WAVES:
                 return "Волны";
-            case LIGHT_TEAL:
-                return "Бирюзовый свет";
-            case LIGHT_VIOLET:
-                return "Фиолетовый свет";
+            case RIBBONS:
+                return "Ленты";
+            case SQUARES:
+                return "Квадраты";
             default:
                 return "Оригинал";
         }
     }
 
-    /** Шейдер сцены в assets/scenes без расширения (у ORIGINAL и «Света» — свои классы). */
+    /** Шейдер сцены в assets/scenes без расширения (у остальных — свои классы). */
     static String shader(int id) {
         return id == WAVES ? "waves" : null;
     }
 
-    /** Данные сцены «Свет» (assets/scenes/light_<имя>.bin) или null, если сцена другая. */
-    static String light(int id) {
-        if (id == LIGHT_TEAL) return "teal";
-        if (id == LIGHT_VIOLET) return "violet";
-        return null;
+    /** Сцена «Свет» (Ленты, Квадраты): свои цвета — LightColors, а не палитра стекла. */
+    static boolean light(int id) {
+        return id == RIBBONS || id == SQUARES;
     }
 
-    /** Сцена берёт цвета из палитры (у «Света» цвета — как в ролике). */
-    static boolean colored(int id) {
-        return light(id) == null;
+    /** Настройки сцены для рендера: палитра стекла или LightColors. */
+    static float[] params(Prefs cfg) {
+        return light(cfg.scene) ? LightColors.params(cfg) : GlassScene.palette(cfg);
+    }
+
+    /** Основные цвета сцены для системы (часы, палитра One UI). */
+    static int[] systemColors(Prefs cfg) {
+        return light(cfg.scene) ? LightColors.systemColors(LightColors.params(cfg))
+                : GlassScene.colors(GlassScene.palette(cfg));
     }
 
     static boolean exists(int id) {

@@ -106,8 +106,28 @@ public class MainActivity extends Activity {
     private int glassBrightness;
     private LinearLayout customColors;
     private Segmented paletteSegment;
+    /** «Ленты» и «Квадраты»: цвет, свои цвета, их яркость (см. LightColors). */
+    private int lightPalette;
+    private int[] lightColors;
+    private int lightBrightness;
+    private LinearLayout lightControls;
+    private LinearLayout lightCustom;
+    /** Квадраты: наложение и у каждого (сверху вниз) — прозрачность, стекло, сила, глубина. */
+    private int squaresOverlap;
+    private int[] squareAlpha;
+    private int[] squareGlass;
+    private int[] squareStrength;
+    private int[] squareDepth;
+    /** Какой квадрат сейчас настраивается. */
+    private int selectedSquare = 2;
+    private LinearLayout squaresControls;
+    private SeekBar squareAlphaBar;
+    private Segmented squareGlassChoice;
+    private LinearLayout squareStrengthRow;
+    private SeekBar squareDepthBar;
     private SeekBar brightnessBar;
     private int glassDurationMs;
+    private int sceneSoftness;
     /** Живое превью сцены в приложении. */
     private WallpaperRenderer glassRenderer;
     private SceneClip glassClip;
@@ -201,6 +221,15 @@ public class MainActivity extends Activity {
         glassTintBottom = cfg.glassTintBottom;
         glassBrightness = cfg.glassBrightness;
         glassDurationMs = cfg.glassDurationMs;
+        sceneSoftness = cfg.sceneSoftness;
+        lightPalette = cfg.lightPalette;
+        lightColors = cfg.lightColors.clone();
+        lightBrightness = cfg.lightBrightness;
+        squaresOverlap = cfg.squaresOverlap;
+        squareAlpha = cfg.squareAlpha.clone();
+        squareGlass = cfg.squareGlass.clone();
+        squareStrength = cfg.squareStrength.clone();
+        squareDepth = cfg.squareDepth.clone();
         LinearLayout sourceIsland = island(root, "Обои");
         sourceChoice = new Segmented(sourceIsland, "Что показывать",
                 new String[] {"Видео", "Сцена"}, glass ? 1 : 0, index -> {
@@ -275,6 +304,8 @@ public class MainActivity extends Activity {
                     previewPalette();
                 }));
         updateBrightnessTrack();
+        lightControls(glassIsland);
+        squaresControls(glassIsland);
         updateColorControls();
         sliderRow(glassIsland, "Длительность анимации", null, Prefs.MIN_GLASS_DURATION,
                 Prefs.MAX_GLASS_DURATION, glassDurationMs / 100,
@@ -282,6 +313,16 @@ public class MainActivity extends Activity {
                 value -> {
                     glassDurationMs = value * 100;
                     sp.edit().putInt(Prefs.KEY_GLASS_DURATION, value).apply();
+                    Prefs.bumpRevision(this);
+                    newGlassClip();
+                    playGlassPreview();
+                });
+        sliderRow(glassIsland, "Плавный старт и остановка",
+                "Разгон в начале и торможение в конце", 0, 100, sceneSoftness,
+                value -> value == 0 ? "выкл." : value + "%",
+                value -> {
+                    sceneSoftness = value;
+                    sp.edit().putInt(Prefs.KEY_SCENE_SOFTNESS, value).apply();
                     Prefs.bumpRevision(this);
                     newGlassClip();
                     playGlassPreview();
@@ -657,21 +698,138 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Цвета видны только у сцен, которые их берут (у «Света» цвета как в ролике); свои цвета —
-     * когда выбран «Свой».
+     * Цвет «Лент» и «Квадратов»: снятый с бирюзового или с фиолетового ролика или свой —
+     * два цвета вместо светло-бирюзового и синего бирюзового ролика (белые блики — белые).
      */
-    private void updateColorControls() {
-        boolean colored = ScenePresets.colored(scene);
-        paletteSegment.item.setVisibility(colored ? View.VISIBLE : View.GONE);
-        customColors.setVisibility(colored && glassPalette == GlassScene.PALETTE_CUSTOM
-                ? View.VISIBLE : View.GONE);
+    private void lightControls(LinearLayout island) {
+        lightControls = vertical();
+        island.addView(lightControls);
+        new Segmented(lightControls, "Цвет", new String[] {"Бирюза", "Фиолет", "Свой"},
+                lightPalette, index -> {
+                    lightPalette = index;
+                    sp.edit().putInt(Prefs.KEY_LIGHT_PALETTE, index).apply();
+                    Prefs.bumpRevision(this);
+                    updateColorControls();
+                    previewPalette();
+                });
+        lightCustom = vertical();
+        lightControls.addView(lightCustom);
+        String[] titles = {"Цвет 1", "Цвет 2"};
+        String[] subtitles = {"Вместо светло-бирюзового — свечение и яркий кант",
+                "Вместо синего — свет на фигурах"};
+        for (int i = 0; i < titles.length; i++) {
+            int index = i;
+            LinearLayout row = row(titles[i], subtitles[i]);
+            View swatch = new View(this);
+            swatch.setBackground(swatchDrawable(lightColors[i]));
+            row.addView(swatch, new LinearLayout.LayoutParams(dp(36), dp(36)));
+            row.setOnClickListener(v -> editLightColor(index, titles[index],
+                    () -> swatch.setBackground(swatchDrawable(lightColors[index]))));
+            lightCustom.addView(row);
+        }
+        sliderRow(lightCustom, "Яркость", "Своих цветов", Prefs.MIN_GLASS_BRIGHTNESS,
+                Prefs.MAX_GLASS_BRIGHTNESS, lightBrightness, value -> value + "%",
+                value -> saveColor(Prefs.KEY_LIGHT_BRIGHTNESS, value),
+                value -> {
+                    lightBrightness = value;
+                    previewPalette();
+                });
     }
 
-    /** Текущая палитра стекла — в превью. */
+    /**
+     * Квадраты: насколько наезжают друг на друга и у выбранного квадрата — прозрачность, вид
+     * стекла (чистое, матовое, рифлёное), его сила и глубина (дальше — меньше, тусклее, под
+     * ближними и слабее сдвигается при наклоне).
+     */
+    private void squaresControls(LinearLayout island) {
+        squaresControls = vertical();
+        island.addView(squaresControls);
+        sliderRow(squaresControls, "Наложение", "Насколько квадраты наезжают друг на друга", 0,
+                LightColors.MAX_OVERLAP, squaresOverlap, value -> value + "%",
+                value -> saveColor(Prefs.KEY_SQUARES_OVERLAP, value),
+                value -> {
+                    squaresOverlap = value;
+                    previewPalette();
+                });
+        new Segmented(squaresControls, "Квадрат", new String[] {"Верхний", "Средний", "Нижний"},
+                selectedSquare, index -> {
+                    selectedSquare = index;
+                    showSquare();
+                });
+        squareAlphaBar = seekBarOf(sliderRow(squaresControls, "Прозрачность",
+                "Насколько видно то, что позади", 0, 100, squareAlpha[selectedSquare],
+                value -> value == 0 ? "непрозрачный" : value + "%",
+                value -> saveColor(Prefs.KEY_SQUARE_ALPHA[selectedSquare], value),
+                value -> {
+                    squareAlpha[selectedSquare] = value;
+                    previewPalette();
+                }));
+        squareGlassChoice = new Segmented(squaresControls, "Стекло",
+                new String[] {"Чистое", "Матовое", "Рифлёное"}, squareGlass[selectedSquare],
+                index -> {
+                    squareGlass[selectedSquare] = index;
+                    saveColor(Prefs.KEY_SQUARE_GLASS[selectedSquare], index);
+                    showSquare();
+                    previewPalette();
+                });
+        squareStrengthRow = sliderRow(squaresControls, "Сила",
+                "Насколько размыто или рифлёно то, что позади", 0, 100,
+                squareStrength[selectedSquare], value -> value + "%",
+                value -> saveColor(Prefs.KEY_SQUARE_STRENGTH[selectedSquare], value),
+                value -> {
+                    squareStrength[selectedSquare] = value;
+                    previewPalette();
+                });
+        squareDepthBar = seekBarOf(sliderRow(squaresControls, "Глубина",
+                "Дальше — меньше, тусклее и под ближними", 0, 100, squareDepth[selectedSquare],
+                value -> value == 0 ? "ближе всех" : value == 100 ? "дальше всех" : value + "%",
+                value -> saveColor(Prefs.KEY_SQUARE_DEPTH[selectedSquare], value),
+                value -> {
+                    squareDepth[selectedSquare] = value;
+                    previewPalette();
+                }));
+        showSquare();
+    }
+
+    /** Настройки выбранного квадрата — в ползунки; сила видна только у матового и рифлёного. */
+    private void showSquare() {
+        squareAlphaBar.setProgress(squareAlpha[selectedSquare]);
+        squareGlassChoice.select(squareGlass[selectedSquare]);
+        seekBarOf(squareStrengthRow).setProgress(squareStrength[selectedSquare]);
+        squareStrengthRow.setVisibility(squareGlass[selectedSquare] == LightColors.GLASS_CLEAR
+                ? View.GONE : View.VISIBLE);
+        squareDepthBar.setProgress(squareDepth[selectedSquare]);
+    }
+
+    /**
+     * У каждой сцены свои цвета: у стекла и волн — палитры стекла, у «Лент» и «Квадратов» —
+     * свои (LightColors); свои цвета — когда выбран «Свой». Настройки квадратов — у «Квадратов».
+     */
+    private void updateColorControls() {
+        boolean light = ScenePresets.light(scene);
+        paletteSegment.item.setVisibility(light ? View.GONE : View.VISIBLE);
+        customColors.setVisibility(!light && glassPalette == GlassScene.PALETTE_CUSTOM
+                ? View.VISIBLE : View.GONE);
+        lightControls.setVisibility(light ? View.VISIBLE : View.GONE);
+        lightCustom.setVisibility(light && lightPalette == LightColors.PALETTE_CUSTOM
+                ? View.VISIBLE : View.GONE);
+        squaresControls.setVisibility(scene == ScenePresets.SQUARES ? View.VISIBLE : View.GONE);
+    }
+
+    /** Настройки сцены по тому, что сейчас выбрано в приложении. */
+    private float[] currentParams() {
+        if (ScenePresets.light(scene)) {
+            return LightColors.params(lightPalette, lightColors, lightBrightness, squaresOverlap,
+                    squareAlpha, squareGlass, squareStrength, squareDepth);
+        }
+        return GlassScene.palette(glassPalette, glassColors, glassTintTop, glassTintBottom,
+                glassBrightness);
+    }
+
+    /** Текущие цвета и настройки сцены — в превью. */
     private void previewPalette() {
         if (glassRenderer == null) return;
-        glassRenderer.setScene(scene, GlassScene.palette(glassPalette, glassColors, glassTintTop,
-                glassTintBottom, glassBrightness));
+        glassRenderer.setScene(scene, currentParams());
     }
 
     /** Свой цвет отпущен — в настройки, обои перечитают их. */
@@ -711,16 +869,105 @@ public class MainActivity extends Activity {
      * тонировка. Превью (и в диалоге, и в приложении) меняется сразу; «Готово» сохраняет,
      * «Отмена» возвращает как было.
      */
+    /** Свой цвет стекла (slot — GlassScene.COLOR_*); у стёкол — ещё тонировка. */
     private void editGlassColor(int slot, String title, Runnable onSaved) {
         int[] colors = glassColors.clone();
         int[] tints = {glassTintTop, glassTintBottom};
         boolean glassSlot = slot == GlassScene.COLOR_GLASS_TOP
                 || slot == GlassScene.COLOR_GLASS_BOTTOM;
         int tintIndex = slot == GlassScene.COLOR_GLASS_TOP ? 0 : 1;
+        int amber = GlassScene.defaultColors(GlassScene.DEFAULT_GLOW_HUE,
+                GlassScene.DEFAULT_HALO_HUE, 100)[slot];
+        colorDialog(title, colors[slot], amber, "Как у «Янтаря»", new ColorDialogHost() {
+            @Override
+            public float[] params(int color) {
+                colors[slot] = color;
+                return GlassScene.palette(GlassScene.PALETTE_CUSTOM, colors, tints[0], tints[1],
+                        glassBrightness);
+            }
+
+            @Override
+            public void addExtra(LinearLayout content, Runnable apply) {
+                if (!glassSlot) return;
+                sliderRow(content, "Тонировка",
+                        "Насколько стекло окрашивает то, что видно сквозь него", 0, 100,
+                        tints[tintIndex], value -> value == 0 ? "нет" : value + "%",
+                        value -> tints[tintIndex] = value,
+                        value -> {
+                            tints[tintIndex] = value;
+                            apply.run();
+                        });
+            }
+
+            @Override
+            public void save(int color) {
+                colors[slot] = color;
+                glassColors = colors;
+                glassTintTop = tints[0];
+                glassTintBottom = tints[1];
+                SharedPreferences.Editor edit = sp.edit()
+                        .putInt(Prefs.KEY_GLASS_COLORS[slot], color);
+                if (glassSlot) {
+                    edit.putInt(tintIndex == 0 ? Prefs.KEY_GLASS_TINT_TOP
+                            : Prefs.KEY_GLASS_TINT_BOTTOM, tints[tintIndex]);
+                }
+                edit.apply();
+                Prefs.bumpRevision(MainActivity.this);
+                onSaved.run();
+            }
+        });
+    }
+
+    /** Свой цвет «Лент» и «Квадратов» (i — 0 или 1). */
+    private void editLightColor(int i, String title, Runnable onSaved) {
+        int[] colors = lightColors.clone();
+        colorDialog(title, colors[i], LightColors.DEFAULT_COLORS[i], "Как в ролике",
+                new ColorDialogHost() {
+                    @Override
+                    public float[] params(int color) {
+                        colors[i] = color;
+                        return LightColors.params(LightColors.PALETTE_CUSTOM, colors,
+                                lightBrightness, squaresOverlap, squareAlpha, squareGlass,
+                                squareStrength, squareDepth);
+                    }
+
+                    @Override
+                    public void addExtra(LinearLayout content, Runnable apply) {
+                    }
+
+                    @Override
+                    public void save(int color) {
+                        colors[i] = color;
+                        lightColors = colors;
+                        sp.edit().putInt(Prefs.KEY_LIGHT_COLORS[i], color).apply();
+                        Prefs.bumpRevision(MainActivity.this);
+                        onSaved.run();
+                    }
+                });
+    }
+
+    /** Что настраивает диалог цвета. */
+    private interface ColorDialogHost {
+        /** Настройки сцены с этим цветом — для превью. */
+        float[] params(int color);
+
+        /** Свои строки под пикером; apply — обновить превью. */
+        void addExtra(LinearLayout content, Runnable apply);
+
+        /** «Готово». */
+        void save(int color);
+    }
+
+    /**
+     * Диалог цвета: превью сцены, пикер, HEX, быстрые цвета; нейтральная кнопка ставит
+     * defaultColor. Превью в приложении меняется вместе с ним.
+     */
+    private void colorDialog(String title, int initial, int defaultColor, String defaultLabel,
+            ColorDialogHost host) {
+        int[] current = {initial};
         WallpaperRenderer[] preview = new WallpaperRenderer[1];
         Runnable apply = () -> {
-            float[] pal = GlassScene.palette(GlassScene.PALETTE_CUSTOM, colors, tints[0],
-                    tints[1], glassBrightness);
+            float[] pal = host.params(current[0]);
             if (preview[0] != null) preview[0].setScene(scene, pal);
             if (glassRenderer != null) glassRenderer.setScene(scene, pal);
         };
@@ -773,7 +1020,7 @@ public class MainActivity extends Activity {
         content.addView(frame, frameParams);
 
         ColorPicker picker = new ColorPicker(this);
-        picker.setColor(colors[slot]);
+        picker.setColor(initial);
         LinearLayout.LayoutParams pickerParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         pickerParams.setMargins(dp(8), 0, dp(8), 0);
@@ -783,10 +1030,10 @@ public class MainActivity extends Activity {
         hexRow.setGravity(Gravity.CENTER_VERTICAL);
         hexRow.setPadding(dp(20), dp(4), dp(20), dp(4));
         View sample = new View(this);
-        sample.setBackground(swatchDrawable(colors[slot]));
+        sample.setBackground(swatchDrawable(initial));
         hexRow.addView(sample, new LinearLayout.LayoutParams(dp(36), dp(36)));
         EditText hex = new EditText(this);
-        hex.setText(hexOf(colors[slot]));
+        hex.setText(hexOf(initial));
         hex.setSingleLine(true);
         hex.setTypeface(Typeface.MONOSPACE);
         hex.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
@@ -801,7 +1048,7 @@ public class MainActivity extends Activity {
 
         boolean[] typing = {false};
         ColorPicker.OnColor setColor = color -> {
-            colors[slot] = color;
+            current[0] = color;
             sample.setBackground(swatchDrawable(color));
             apply.run();
         };
@@ -853,38 +1100,16 @@ public class MainActivity extends Activity {
             }
             content.addView(quick);
         }
-
-        if (glassSlot) {
-            sliderRow(content, "Тонировка", "Насколько стекло окрашивает то, что видно сквозь него",
-                    0, 100, tints[tintIndex], value -> value == 0 ? "нет" : value + "%",
-                    value -> tints[tintIndex] = value,
-                    value -> {
-                        tints[tintIndex] = value;
-                        apply.run();
-                    });
-        }
+        host.addExtra(content, apply);
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(content);
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(title)
                 .setView(scroll)
-                .setPositiveButton("Готово", (d, w) -> {
-                    glassColors = colors;
-                    glassTintTop = tints[0];
-                    glassTintBottom = tints[1];
-                    SharedPreferences.Editor edit = sp.edit()
-                            .putInt(Prefs.KEY_GLASS_COLORS[slot], colors[slot]);
-                    if (glassSlot) {
-                        edit.putInt(tintIndex == 0 ? Prefs.KEY_GLASS_TINT_TOP
-                                : Prefs.KEY_GLASS_TINT_BOTTOM, tints[tintIndex]);
-                    }
-                    edit.apply();
-                    Prefs.bumpRevision(this);
-                    onSaved.run();
-                })
+                .setPositiveButton("Готово", (d, w) -> host.save(current[0]))
                 .setNegativeButton("Отмена", null)
-                .setNeutralButton("Как у «Янтаря»", null)
+                .setNeutralButton(defaultLabel, null)
                 .create();
         // Клавиатура — только если нажать на поле HEX.
         dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
@@ -892,14 +1117,12 @@ public class MainActivity extends Activity {
         // Отмена или «Готово» — превью приложения снова по сохранённым цветам.
         dialog.setOnDismissListener(d -> previewPalette());
         dialog.show();
-        // «Как у «Янтаря»» не закрывает диалог — просто ставит цвет по умолчанию.
+        // Нейтральная кнопка не закрывает диалог — просто ставит цвет по умолчанию.
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
-            int color = GlassScene.defaultColors(GlassScene.DEFAULT_GLOW_HUE,
-                    GlassScene.DEFAULT_HALO_HUE, 100)[slot];
-            picker.setColor(color);
-            setColor.onColor(color);
+            picker.setColor(defaultColor);
+            setColor.onColor(defaultColor);
             typing[0] = true;
-            hex.setText(hexOf(color));
+            hex.setText(hexOf(defaultColor));
             typing[0] = false;
         });
     }
@@ -966,7 +1189,7 @@ public class MainActivity extends Activity {
     private void newGlassClip() {
         if (glassRenderer == null) return;
         if (glassClip != null) glassClip.release();
-        SceneClip clip = new SceneClip(glassDurationMs, false);
+        SceneClip clip = new SceneClip(glassDurationMs, false, Easing.ramp(sceneSoftness));
         clip.setOnChange(() -> {
             if (glassRenderer != null) glassRenderer.requestSceneFrame();
         });

@@ -256,7 +256,7 @@ public class VideoWallpaperService extends WallpaperService {
             public void run() {
                 float t = Math.min(1f, (SystemClock.uptimeMillis() - zoomStart)
                         / (float) Math.max(1, zoomDuration));
-                float eased = 1f - (1f - t) * (1f - t); // замедление к концу
+                float eased = Easing.soft(t, Easing.ZOOM_RAMP); // мягкий старт и остановка
                 unlockScale = zoomFrom + (zoomTo - zoomFrom) * eased;
                 if (tiltToCenter) {
                     tiltX = tiltFromX * (1f - eased);
@@ -688,7 +688,8 @@ public class VideoWallpaperService extends WallpaperService {
                 Prefs next = Prefs.load(VideoWallpaperService.this);
                 boolean sourceChanged = next.source != cfg.source;
                 if (sourceChanged || reverseFor(next) != reverseAvailable
-                        || (next.glass() && next.glassDurationMs != cfg.glassDurationMs)) {
+                        || (next.glass() && (next.glassDurationMs != cfg.glassDurationMs
+                                || next.sceneSoftness != cfg.sceneSoftness))) {
                     closePlayers();
                 }
                 if (sourceChanged) {
@@ -699,7 +700,7 @@ public class VideoWallpaperService extends WallpaperService {
                 }
                 loadConfig();
                 if (renderer != null) {
-                    renderer.setScene(cfg.scene, glass ? GlassScene.palette(cfg) : null);
+                    renderer.setScene(cfg.scene, glass ? ScenePresets.params(cfg) : null);
                 }
                 log("настройки обновлены, реверс " + (reverseAvailable ? "готов" : "недоступен"));
                 if (finishedForever) phase = PHASE_DONE;
@@ -758,7 +759,7 @@ public class VideoWallpaperService extends WallpaperService {
                 // Сцена рисуется сразу; в превью — неподвижный кадр покоя.
                 stillRequest++;
                 if (target != null) {
-                    target.setScene(cfg.scene, GlassScene.palette(cfg));
+                    target.setScene(cfg.scene, ScenePresets.params(cfg));
                     if (isPreview()) {
                         float rest = restAtEnd() ? 1f : 0f;
                         target.setSceneSource(WallpaperRenderer.SOURCE_FORWARD,
@@ -775,7 +776,7 @@ public class VideoWallpaperService extends WallpaperService {
                                 });
                     }
                 }
-                int[] tones = GlassScene.colors(GlassScene.palette(cfg));
+                int[] tones = ScenePresets.systemColors(cfg);
                 colors = new WallpaperColors(Color.valueOf(tones[0]), Color.valueOf(tones[1]),
                         Color.valueOf(tones[2]));
                 colorsAtEnd = null;
@@ -1208,11 +1209,12 @@ public class VideoWallpaperService extends WallpaperService {
 
         /** Часы сцены «Стекло» для источника; рендер рисует по ним кадры. */
         private Clip sceneClip(boolean reversed, int source) {
-            SceneClip clip = new SceneClip(cfg.glassDurationMs, reversed);
+            SceneClip clip = new SceneClip(cfg.glassDurationMs, reversed,
+                    Easing.ramp(cfg.sceneSoftness));
             clip.setOnChange(() -> {
                 if (renderer != null) renderer.requestSceneFrame();
             });
-            renderer.setScene(cfg.scene, GlassScene.palette(cfg));
+            renderer.setScene(cfg.scene, ScenePresets.params(cfg));
             renderer.setSceneSource(source, clip);
             return clip;
         }
