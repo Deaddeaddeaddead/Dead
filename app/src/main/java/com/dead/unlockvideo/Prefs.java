@@ -27,6 +27,8 @@ final class Prefs {
     static final String KEY_UNLOCK_ZOOM_AMOUNT = "unlock_zoom_amount";
     static final String KEY_PARALLAX = "parallax";
     static final String KEY_ZOOM_SYNC = "zoom_sync";
+    static final String KEY_ZOOM_ON_DISMISS = "zoom_on_dismiss";
+    static final String KEY_RESET_ON_SCREEN_OFF = "reset_on_screen_off";
     static final String KEY_ZOOM_DURATION = "zoom_duration";
     // Дополнительно
     static final String KEY_SOUND = "sound";
@@ -80,6 +82,10 @@ final class Prefs {
     final int unlockZoomAmount;
     /** Масштаб длится столько же, сколько играет видео. */
     final boolean zoomSync;
+    /** Масштаб — только когда убирается экран блокировки, а не при распознавании лица. */
+    final boolean zoomOnDismiss;
+    /** При выключении экрана сразу возвращать масштаб и параллакс в исходное. */
+    final boolean resetOnScreenOff;
     /** Длительность масштаба, мс (когда не «как у видео» или видео не играет). */
     final int zoomDurationMs;
     /** Сила параллакса, 0 — выключен. */
@@ -107,6 +113,8 @@ final class Prefs {
                 sp.getInt(KEY_UNLOCK_ZOOM_AMOUNT, 8)));
         parallax = Math.max(0, Math.min(MAX_PARALLAX, sp.getInt(KEY_PARALLAX, 0)));
         zoomSync = sp.getBoolean(KEY_ZOOM_SYNC, true);
+        zoomOnDismiss = sp.getBoolean(KEY_ZOOM_ON_DISMISS, false);
+        resetOnScreenOff = sp.getBoolean(KEY_RESET_ON_SCREEN_OFF, true);
         zoomDurationMs = 100 * Math.max(MIN_ZOOM_DURATION, Math.min(MAX_ZOOM_DURATION,
                 sp.getInt(KEY_ZOOM_DURATION, 7)));
         sound = sp.getBoolean(KEY_SOUND, false);

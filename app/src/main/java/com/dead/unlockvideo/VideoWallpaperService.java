@@ -131,6 +131,8 @@ public class VideoWallpaperService extends WallpaperService {
          * пришло событие разблокировки. Сбрасывается при выключении экрана.
          */
         private boolean unlocked;
+        /** Экран блокировки убран (свайпом или сразу при разблокировке пальцем). */
+        private boolean keyguardGone;
         /**
          * Был ли телефон заблокирован (требовал проверки личности), когда включился экран.
          * Если нет (отсрочка блокировки, Smart Lock), разблокировкой считаем только уход
@@ -193,12 +195,10 @@ public class VideoWallpaperService extends WallpaperService {
         private final Runnable unlockWatch = new Runnable() {
             @Override
             public void run() {
-                if (!visible || unlocked) return;
-                if (unlockedNow()) {
-                    onUnlocked();
-                } else {
-                    handler.postDelayed(this, UNLOCK_POLL_MS);
-                }
+                if (!visible) return;
+                if (!unlocked && unlockedNow()) onUnlocked();
+                if (!keyguardGone && !keyguard.isKeyguardLocked()) onKeyguardGone();
+                if (!unlocked || !keyguardGone) handler.postDelayed(this, UNLOCK_POLL_MS);
             }
         };
 
@@ -212,6 +212,7 @@ public class VideoWallpaperService extends WallpaperService {
                     onScreenOn();
                 } else if (Intent.ACTION_USER_PRESENT.equals(action)) {
                     onUnlocked();
+                    onKeyguardGone();
                 }
             }
         };
@@ -238,6 +239,7 @@ public class VideoWallpaperService extends WallpaperService {
 
             loadConfig();
             unlocked = unlockedNow();
+            keyguardGone = isPreview() || !keyguard.isKeyguardLocked();
             sensorManager = context.getSystemService(SensorManager.class);
             gyroscope = sensorManager == null ? null
                     : sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
@@ -343,12 +345,19 @@ public class VideoWallpaperService extends WallpaperService {
         private void onScreenOff() {
             log("экран выключен, " + state());
             unlocked = isPreview();
+            keyguardGone = isPreview();
             sampleOnWake = true;
             handler.removeCallbacks(unlockWatch);
             hiddenByApp = false;
             armed = isPreview();
-            // Масштаб оставляем как есть — обратно он поедет на экране блокировки.
             cancelUnlockZoom();
+            setGyroscope(false); // параллакс — в центр, гироскоп не тратит батарею
+            if (cfg.resetOnScreenOff) {
+                // Сразу в исходное — чтобы AOD не показывал обои в случайном положении.
+                unlockScale = lockScale();
+                applyTransform();
+            }
+            // Иначе масштаб плавно вернётся, когда появится экран блокировки.
             pauseAll();
             boolean atStart = forwardPosition() <= 30;
             if (cfg.lockAction == Prefs.LOCK_KEEP || atStart) return;
@@ -372,6 +381,7 @@ public class VideoWallpaperService extends WallpaperService {
                 return;
             }
             watchUnlock();
+            setGyroscope(visible && cfg.parallax > 0);
             if (visible && !unlocked) animateUnlockZoom(lockScale(), lockZoomDuration());
             if (startOnScreenOn()) {
                 log("запуск: включение экрана");
@@ -392,9 +402,9 @@ public class VideoWallpaperService extends WallpaperService {
                 return;
             }
             unlocked = true;
-            handler.removeCallbacks(unlockWatch);
+            watchUnlock(); // дальше ждём, когда уберётся экран блокировки
             if (reversing) stopReverse();
-            animateUnlockZoom(homeScale(), unlockZoomDuration());
+            if (!cfg.zoomOnDismiss) animateUnlockZoom(homeScale(), unlockZoomDuration());
             if (cfg.startOnUnlock) {
                 log("запуск: разблокировка");
                 triggerForward(false);
@@ -569,7 +579,17 @@ public class VideoWallpaperService extends WallpaperService {
 
         private void watchUnlock() {
             handler.removeCallbacks(unlockWatch);
-            if (visible && !unlocked) handler.postDelayed(unlockWatch, UNLOCK_POLL_MS);
+            if (visible && (!unlocked || !keyguardGone)) {
+                handler.postDelayed(unlockWatch, UNLOCK_POLL_MS);
+            }
+        }
+
+        /** Экран блокировки убран — начинается переход на рабочий стол. */
+        private void onKeyguardGone() {
+            if (keyguardGone) return;
+            keyguardGone = true;
+            log("экран блокировки убран");
+            if (cfg.zoomOnDismiss) animateUnlockZoom(homeScale(), unlockZoomDuration());
         }
 
         /**

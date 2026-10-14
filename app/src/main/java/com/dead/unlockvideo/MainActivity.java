@@ -83,6 +83,7 @@ public class MainActivity extends Activity {
     private View zoomAmountItem;
     private Segmented zoomSpeedChoice;
     private View zoomDurationItem;
+    private View zoomOnDismissItem;
     private LinearLayout reverseBox;
     private ProgressBar reverseProgress;
     private TextView reverseStatus;
@@ -261,6 +262,10 @@ public class MainActivity extends Activity {
                     sp.edit().putInt(Prefs.KEY_ZOOM_DURATION, value).apply();
                     Prefs.bumpRevision(this);
                 });
+        zoomOnDismissItem = switchItem(root, Prefs.KEY_ZOOM_ON_DISMISS, cfg.zoomOnDismiss,
+                "Масштаб — когда убирается экран блокировки",
+                "При разблокировке лицом видео запускается сразу, а масштаб меняется, только "
+                        + "когда экран блокировки убран свайпом и начался переход на рабочий стол.");
         LinearLayout parallaxItem = sliderItem(root, "Параллакс", 0, Prefs.MAX_PARALLAX,
                 cfg.parallax, value -> value == 0 ? "выкл." : value + "%", value -> {
                     sp.edit().putInt(Prefs.KEY_PARALLAX, value).apply();
@@ -269,6 +274,11 @@ public class MainActivity extends Activity {
         parallaxItem.addView(description("Изображение слегка смещается, когда вы "
                 + "поворачиваете телефон (по гироскопу), и плавно возвращается к центру. "
                 + "Видео при этом немного увеличивается, чтобы не было видно краёв."));
+        switchItem(root, Prefs.KEY_RESET_ON_SCREEN_OFF, cfg.resetOnScreenOff,
+                "Сбрасывать положение при выключении экрана",
+                "Масштаб и параллакс сразу возвращаются в исходное, чтобы Always On Display "
+                        + "не показывал обои в случайном положении. Если выключено, масштаб "
+                        + "плавно вернётся, когда появится экран блокировки.");
 
         // Дополнительно
         section(root, "Дополнительно");
@@ -375,6 +385,7 @@ public class MainActivity extends Activity {
         setRowEnabled(zoomAmountItem, zoomOn);
         setRowEnabled(zoomSpeedChoice.item, zoomOn);
         setRowEnabled(zoomDurationItem, zoomOn);
+        setRowEnabled(zoomOnDismissItem, zoomOn);
         boolean reverse = lockChoice.selected == Prefs.LOCK_REVERSE;
         setRowEnabled(screenOnItem, !reverse);
         screenOnNote.setVisibility(reverse ? View.VISIBLE : View.GONE);
