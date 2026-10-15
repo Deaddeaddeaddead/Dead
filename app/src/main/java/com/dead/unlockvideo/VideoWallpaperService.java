@@ -964,6 +964,11 @@ public class VideoWallpaperService extends WallpaperService {
             zoomTo = target;
             zoomStart = SystemClock.uptimeMillis();
             zoomDuration = durationMs;
+            log(String.format(java.util.Locale.ROOT, "масштаб %.3f → %.3f за %d мс%s%s",
+                    zoomFrom, zoomTo, durationMs,
+                    sceneFrom != sceneTo ? String.format(java.util.Locale.ROOT,
+                            " в такт сцене %.2f→%.2f", sceneFrom, sceneTo) : " мягко",
+                    tiltMoved ? ", параллакс в центр" : ""));
             zoomAnimation = new WallpaperRenderer.ScaleAnimation(zoomFrom, zoomTo, zoomStart,
                     durationMs, sceneFrom, sceneTo, cfg.sceneSmooth);
             tiltToCenter = tiltMoved;
@@ -976,7 +981,13 @@ public class VideoWallpaperService extends WallpaperService {
 
         /** Переход масштаба прерван — масштаб остаётся, где был. */
         private void cancelUnlockZoom() {
-            if (zoomAnimating) unlockScale = currentScale();
+            if (zoomAnimating) {
+                unlockScale = currentScale();
+                if (Math.abs(unlockScale - zoomTo) > 0.001f) {
+                    log(String.format(java.util.Locale.ROOT, "масштаб прерван на %.3f (шёл к %.3f)",
+                            unlockScale, zoomTo));
+                }
+            }
             handler.removeCallbacks(zoomStep);
             zoomAnimating = false;
             tiltToCenter = false;
