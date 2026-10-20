@@ -467,6 +467,10 @@ public class MainActivity extends Activity {
         LinearLayout log = row("Журнал событий", null);
         log.setOnClickListener(v -> showEventLog());
         extra.addView(log);
+        LinearLayout shortcuts = row("Стеклянные ярлыки",
+                "Иконка любого приложения в стекле — ярлыком на рабочий стол");
+        shortcuts.setOnClickListener(v -> GlassShortcuts.show(this));
+        extra.addView(shortcuts);
 
         updateEnabled();
         updateVideo();

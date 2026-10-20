@@ -5,11 +5,16 @@
         android:name="android.software.live_wallpaper"
         android:required="true" />
 
-    <!-- Чтобы узнать, какой лаунчер стоит (для распознавания списка недавних приложений). -->
+    <!-- Какой лаунчер стоит (для распознавания списка недавних приложений) и какие
+         приложения можно запустить (для стеклянных ярлыков). -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.HOME" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
 
