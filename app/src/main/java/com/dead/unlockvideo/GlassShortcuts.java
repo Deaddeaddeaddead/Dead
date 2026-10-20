@@ -2,17 +2,14 @@ package com.dead.unlockvideo;
 
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.appwidget.AppWidgetManager;
 import android.content.ComponentName;
-import android.content.Intent;
 import android.content.pm.LauncherActivityInfo;
 import android.content.pm.LauncherApps;
-import android.content.pm.ShortcutInfo;
-import android.content.pm.ShortcutManager;
 import android.graphics.Bitmap;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
-import android.graphics.drawable.Icon;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Process;
@@ -35,9 +32,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Стеклянные ярлыки: список приложений, у выбранного — стеклянная иконка (GlassIcon) и ярлык с
- * ней на рабочий стол. Ярлык открывает само приложение. Иконку можно сделать «своей формы»
- * (плитка со скруглением, вокруг прозрачно) или «адаптивной» — тогда форму задаёт лаунчер.
+ * Стеклянные ярлыки: список приложений, у выбранного — стеклянная иконка (GlassIcon) на
+ * рабочий стол. Ставится виджетом (GlassWidget), который открывает само приложение.
  */
 final class GlassShortcuts {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -57,17 +53,15 @@ final class GlassShortcuts {
 
     private final Activity activity;
     private int style = GlassIcon.STYLE_WHITE;
-    private boolean adaptive;
 
     private GlassShortcuts(Activity activity) {
         this.activity = activity;
     }
 
     static void show(Activity activity) {
-        ShortcutManager sm = activity.getSystemService(ShortcutManager.class);
-        if (sm == null || !sm.isRequestPinShortcutSupported()) {
-            Toast.makeText(activity, "Лаунчер не умеет добавлять ярлыки", Toast.LENGTH_LONG)
-                    .show();
+        if (!AppWidgetManager.getInstance(activity).isRequestPinAppWidgetSupported()) {
+            Toast.makeText(activity, "Лаунчер не умеет добавлять виджеты из приложений",
+                    Toast.LENGTH_LONG).show();
             return;
         }
         new GlassShortcuts(activity).loadApps();
@@ -162,17 +156,15 @@ final class GlassShortcuts {
         Bitmap[] current = new Bitmap[1];
         Runnable refresh = () -> {
             int st = style;
-            boolean ad = adaptive;
             // Своя копия: рисование меняет границы, а оригинал показан в списке.
             Drawable.ConstantState state = app.icon.getConstantState();
             Drawable icon = state != null ? state.newDrawable().mutate() : app.icon;
             WORKER.execute(() -> {
-                Bitmap bmp = GlassIcon.render(icon, st, ad);
+                Bitmap bmp = GlassIcon.render(icon, st);
                 MAIN.post(() -> {
-                    if (st != style || ad != adaptive) return;
+                    if (st != style) return;
                     current[0] = bmp;
-                    // Адаптивная — как её покажет лаунчер: средняя часть, скруглённая.
-                    preview.setImageBitmap(ad ? adaptivePreview(bmp) : bmp);
+                    preview.setImageBitmap(bmp);
                 });
             });
         };
@@ -183,14 +175,8 @@ final class GlassShortcuts {
                     style = value;
                     refresh.run();
                 }));
-        content.addView(label("Форма"));
-        content.addView(segments(new String[] {"Своя", "Как у лаунчера"},
-                () -> adaptive ? 1 : 0, value -> {
-                    adaptive = value == 1;
-                    refresh.run();
-                }));
-        TextView note = text("Если лаунчер добавит к значку рамку или фон — попробуйте другую "
-                + "форму.", 13, R.color.text2);
+        TextView note = text("Ставится виджетом 1×1: так вокруг стекла прозрачно и нет значка "
+                + "нашего приложения. В нижнюю панель виджет не встаёт.", 13, R.color.text2);
         note.setPadding(0, dp(12), 0, 0);
         content.addView(note);
         refresh.run();
@@ -203,49 +189,11 @@ final class GlassShortcuts {
                 .show();
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             if (current[0] == null) return;
-            pin(app, current[0], adaptive);
-            dialog.dismiss();
-        });
-    }
-
-    private void pin(App app, Bitmap bitmap, boolean adaptive) {
-        ShortcutManager sm = activity.getSystemService(ShortcutManager.class);
-        Intent launch = new Intent(Intent.ACTION_MAIN)
-                .addCategory(Intent.CATEGORY_LAUNCHER)
-                .setComponent(app.component)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
-                        | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-        // У каждого варианта — свой ярлык: на столе их может быть несколько.
-        String id = "glass:" + app.component.flattenToShortString() + ":" + style
-                + (adaptive ? ":a" : ":b");
-        ShortcutInfo info = new ShortcutInfo.Builder(activity, id)
-                .setShortLabel(app.label)
-                .setIcon(adaptive ? Icon.createWithAdaptiveBitmap(bitmap)
-                        : Icon.createWithBitmap(bitmap))
-                .setIntent(launch)
-                .build();
-        try {
-            if (!sm.requestPinShortcut(info, null)) {
+            if (!GlassWidget.requestPin(activity, app.component, app.label, current[0])) {
                 Toast.makeText(activity, "Лаунчер отказал", Toast.LENGTH_LONG).show();
             }
-        } catch (IllegalStateException | IllegalArgumentException e) {
-            Toast.makeText(activity, "Не удалось: " + e.getMessage(), Toast.LENGTH_LONG).show();
-        }
-    }
-
-    /** Как лаунчер покажет адаптивную иконку: середина 72 из 108, скруглённая. */
-    private static Bitmap adaptivePreview(Bitmap layer) {
-        int s = layer.getWidth();
-        int inset = Math.round(s * 18f / 108f);
-        int size = s - 2 * inset;
-        Bitmap out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
-        android.graphics.Canvas c = new android.graphics.Canvas(out);
-        android.graphics.Path clip = new android.graphics.Path();
-        clip.addRoundRect(0, 0, size, size, size * 0.3f, size * 0.3f,
-                android.graphics.Path.Direction.CW);
-        c.clipPath(clip);
-        c.drawBitmap(layer, -inset, -inset, null);
-        return out;
+            dialog.dismiss();
+        });
     }
 
     private interface IntGetter {

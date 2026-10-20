@@ -34,9 +34,6 @@ final class GlassIcon {
     private static final float CORNER = 0.26f;
     /** Силуэт вписывается в такую долю плитки. */
     private static final float GLYPH = 0.56f;
-    /** Адаптивная иконка: видимая часть — 72 из 108, форма лаунчера близка к такой. */
-    private static final float ADAPTIVE_INSET = 18f / 108f;
-    private static final float ADAPTIVE_CORNER = 0.3f;
 
     /** Силуэт, вписанный в плитку, и как он вписан: масштаб и прежний центр. */
     private static final class Fit {
@@ -56,46 +53,38 @@ final class GlassIcon {
     private GlassIcon() {
     }
 
-    /**
-     * adaptive — для «адаптивной» иконки: картинка — слой 108×108, лаунчер сам вырезает из
-     * середины 72×72 своей формой; стекло заполняет всё, кромка — по видимой части.
-     */
-    static Bitmap render(Drawable icon, int style, boolean adaptive) {
+    static Bitmap render(Drawable icon, int style) {
         int s = SIZE;
         Bitmap full = drawIcon(icon, s);
         Bitmap out = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(out);
-        float inset = adaptive ? s * ADAPTIVE_INSET : s * TILE_INSET;
+        float inset = s * TILE_INSET;
         RectF tile = new RectF(inset, inset, s - inset, s - inset);
-        float r = tile.width() * (adaptive ? ADAPTIVE_CORNER : CORNER);
+        float r = tile.width() * CORNER;
         Path shape = new Path();
         shape.addRoundRect(tile, r, r, Path.Direction.CW);
         Fit fit = glyphMask(icon, full, s, tile.width());
 
+        // Тень под плиткой — чтобы стекло читалось и на светлых обоях.
+        Paint shadow = new Paint(Paint.ANTI_ALIAS_FLAG);
+        shadow.setColor(Color.argb(70, 0, 0, 0));
+        shadow.setMaskFilter(new BlurMaskFilter(s * 0.035f, BlurMaskFilter.Blur.NORMAL));
+        c.save();
+        c.translate(0, s * 0.018f);
+        c.drawPath(shape, shadow);
+        c.restore();
+        // Тень не должна просвечивать сквозь стекло.
+        Paint clear = new Paint(Paint.ANTI_ALIAS_FLAG);
+        clear.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
+        c.drawPath(shape, clear);
+
+        // Тело стекла: светлее сверху, прозрачнее снизу.
         Paint body = new Paint(Paint.ANTI_ALIAS_FLAG);
         body.setShader(new LinearGradient(0, tile.top, 0, tile.bottom,
                 new int[] {Color.argb(92, 255, 255, 255), Color.argb(46, 255, 255, 255),
                         Color.argb(34, 255, 255, 255)},
                 new float[] {0f, 0.55f, 1f}, Shader.TileMode.CLAMP));
-        if (adaptive) {
-            // Форму задаёт лаунчер — стекло до краёв слоя.
-            c.drawRect(0, 0, s, s, body);
-        } else {
-            // Тень под плиткой — чтобы стекло читалось и на светлых обоях.
-            Paint shadow = new Paint(Paint.ANTI_ALIAS_FLAG);
-            shadow.setColor(Color.argb(70, 0, 0, 0));
-            shadow.setMaskFilter(new BlurMaskFilter(s * 0.035f, BlurMaskFilter.Blur.NORMAL));
-            c.save();
-            c.translate(0, s * 0.018f);
-            c.drawPath(shape, shadow);
-            c.restore();
-            // Тень не должна просвечивать сквозь стекло.
-            Paint clear = new Paint(Paint.ANTI_ALIAS_FLAG);
-            clear.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.CLEAR));
-            c.drawPath(shape, clear);
-            // Тело стекла: светлее сверху, прозрачнее снизу.
-            c.drawPath(shape, body);
-        }
+        c.drawPath(shape, body);
 
         c.save();
         c.clipPath(shape);
@@ -240,6 +229,10 @@ final class GlassIcon {
             double dist = Math.sqrt(dr * dr + dg * dg + db * db) / 255.0;
             double t = Math.max(0, Math.min(1, (dist - 0.08) / 0.17));
             alpha[i] = (int) Math.round(t * t * (3 - 2 * t) * (p >>> 24));
+        }
+        // Выделилось больше половины — это фон, а значок — остальное.
+        if (coverage(alpha, s) > 0.5f) {
+            for (int i = 0; i < px.length; i++) alpha[i] = (px[i] >>> 24) - alpha[i];
         }
         return alpha;
     }

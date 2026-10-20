@@ -468,7 +468,7 @@ public class MainActivity extends Activity {
         log.setOnClickListener(v -> showEventLog());
         extra.addView(log);
         LinearLayout shortcuts = row("Стеклянные ярлыки",
-                "Иконка любого приложения в стекле — ярлыком на рабочий стол");
+                "Иконка любого приложения в стекле — виджетом на рабочий стол");
         shortcuts.setOnClickListener(v -> GlassShortcuts.show(this));
         extra.addView(shortcuts);
 
